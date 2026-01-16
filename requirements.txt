@@ -1,0 +1,4 @@
+torch
+stable-baselines3[extra]
+gymnasium
+openpyxl
