@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "irl"
+version = "0.1.0"
+description = "Inverse Reinforcement Learning for V2G project"
+readme = "README.md"
+requires-python = ">=3.12"
+
+authors = [
+  { name = "Johnny Xiao Hong Yu", email = "jhx21@ic.ac.uk" }
+]
+
+dependencies = [
+  "numpy",
+  "pandas",
+  "scipy",
+  "matplotlib",
+  "gymnasium",
+  "torch",
+  "stable-baselines3 == 2.2.1",
+  "imitation",
+  "openpyxl"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
