@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Ignore trained models for now
+models/
+
 # C extensions
 *.so
 

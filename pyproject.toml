@@ -7,7 +7,7 @@ name = "irl"
 version = "0.1.0"
 description = "Inverse Reinforcement Learning for V2G project"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = "==3.11.14"
 
 authors = [
   { name = "Johnny Xiao Hong Yu", email = "jhx21@ic.ac.uk" }
@@ -30,3 +30,16 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]

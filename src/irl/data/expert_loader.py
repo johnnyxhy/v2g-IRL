@@ -35,21 +35,53 @@ def load_trajectories(input_file, output_file=None):
     }
     df['loc_int'] = df['Location'].map(loc_map)
 
-    # --- 3. Convert Trip times to timestep ---
-    df['out_start_timestep'] = (df['Trip_Start_Time_Out_Mins'] / 15).astype(int)
-    df['out_end_timestep'] = (df['Trip_End_Time_Out_Mins'] / 15).astype(int)
-    df['return_start_timestep'] = (df['Trip_Start_Time_Return_Mins'] / 15).astype(int)
-    df['return_end_timestep'] = (df['Trip_End_Time_Return_Mins'] / 15).astype(int)
+    # --- 3. Find journey timesteps and duration
 
-    # --- 4. Convert Energy to SoC ---
-    df['SoC'] = df['Battery_Energy_Level_kWh'] / df['Battery_Capacity_kWh']
+    df['out_start_timestep'] = df.groupby('EpisodeID')['Timestep'].transform(
+        lambda x: x[df.loc[x.index, 'Location'] == 'driving_out'].min() if any(df.loc[x.index, 'Location'] == 'driving_out') else 96
+    )
+    df['return_start_timestep'] = df.groupby('EpisodeID')['Timestep'].transform(
+        lambda x: x[df.loc[x.index, 'Location'] == 'driving_return'].min() if any(df.loc[x.index, 'Location'] == 'driving_return') else 96
+    )
+    df['out_duration'] = df.groupby('EpisodeID')['Timestep'].transform(
+        lambda x: x[df.loc[x.index, 'Location'] == 'driving_out'].count() if any(df.loc[x.index, 'Location'] == 'driving_out') else 0
+    )
+    df['return_duration'] = df.groupby('EpisodeID')['Timestep'].transform(
+        lambda x: x[df.loc[x.index, 'Location'] == 'driving_return'].count() if any(df.loc[x.index, 'Location'] == 'driving_return') else 0
+    )
+
+    # --- 4. Find timestep to next journey --- 
+    # 1. Define the conditions for the three phases of the day
+    cond_start_home = df['Timestep'] < df['out_start_timestep']
+    cond_work = (df['Timestep'] >= df['out_start_timestep']) & (df['Timestep'] < df['return_start_timestep'])
+    cond_end_home = df['Timestep'] >= df['return_start_timestep']
+
+    # 2. Define the calculations for each phase
+    calc_start_home = df['out_start_timestep'] - df['Timestep']
+    calc_work = df['return_start_timestep'] - df['Timestep']
+    calc_end_home = 96 - df['Timestep']
+
+    # 3. Apply the logic using np.select
+    df['timesteps_to_next_journey'] = np.select(
+        [cond_start_home, cond_work, cond_end_home],  # The conditions
+        [calc_start_home, calc_work, calc_end_home],  # The matching values
+        default=0
+    )
+
+    # --- 5. Convert Energy to SoC ---
+    df['SoC_end'] = df['Battery_Energy_Level_kWh'] / df['Battery_Capacity_kWh'] # This value is SOC at end of timestep
     df['SoC_target'] = np.where(df['Target_Energy_kWh'].isna(), 0.0, df['Target_Energy_kWh'] / df['Battery_Capacity_kWh'])
 
-    # --- 5. Convert Charge/Discharge amount to SoC ---
-    df['Charge_Amount_SoC'] = df['Total_Charge_kWh'] / df['Battery_Capacity_kWh']
-    df['Discharge_Amount_SoC'] = df['Total_Discharge_kWh'] / df['Battery_Capacity_kWh']
-    df['Charge_Action'] = np.select([df['Action'] == 'charge', df['Action'] == 'discharge'], 
-                                    [df['Charge_Amount_SoC'], -df['Discharge_Amount_SoC']], 
+    # --- 6. Find SoC at start of timestep ---
+    df['SoC'] = df.groupby('EpisodeID')['SoC_end'].shift(1)
+    # first timestep SoC is initial SoC
+    first_timesteps = df['Timestep'] == 0
+    df.loc[first_timesteps, 'SoC'] = df.loc[first_timesteps, 'Initial_Energy_kWh'] / df.loc[first_timesteps, 'Battery_Capacity_kWh']
+
+    # --- 7. Convert Charge/Discharge amount to percentage of charger ---
+    df['Charge_Action'] = np.select([df['Location'] == 'home', df['Location'] == 'work'], 
+                                    [df['Amount_Charged_During_Timestep_kWh']*4/df['Home_Charger_kW'],
+                                        df['Amount_Charged_During_Timestep_kWh']*4/df['Work_Charger_kW']], 
                                     default=0.0)
 
     # --- EXTRACT EPISODES ---
@@ -65,9 +97,29 @@ def load_trajectories(input_file, output_file=None):
         # --- ENSURE SORTED BY TIMESTEP ---
         episode_data = episode_data.sort_values(by='Timestep').reset_index(drop=True)
 
+        # --- IGNORE EPISODES WITH 0 OUT OR RETURN DURATIONS -- 
+        if (episode_data['out_duration'].iloc[0] == 0) or (episode_data['return_duration'].iloc[0] == 0):
+            continue
+
+        # --- ONLY KEEP HOME AND WORK SEGMENTS ---
+        episode_data = episode_data[episode_data['Location'].isin(['home', 'work'])].reset_index(drop=True)
+
+        # --- EXTRACT INITIAL VALUES ---
+        initial_values = {
+            'Initial_SoC': episode_data['SoC'].iloc[0].item(),
+            'Battery_Capacity_kWh': episode_data['Battery_Capacity_kWh'].iloc[0].item(),
+            'Energy_per_Journey_Minute': episode_data['Energy per journey minute'].iloc[0].item(),
+            'Out_Start_Timestep': episode_data['out_start_timestep'].iloc[0].item(),
+            'Return_Start_Timestep': episode_data['return_start_timestep'].iloc[0].item(),
+            'Out_Duration': episode_data['out_duration'].iloc[0].item(),
+            'Return_Duration': episode_data['return_duration'].iloc[0].item(),
+            'Home_Charger_kW': episode_data['Home_Charger_kW'].iloc[0].item(),
+            'Work_Charger_kW': episode_data['Work_Charger_kW'].iloc[0].item(),
+        }
+
         # --- EXTRACT OBSERVATIONS ---
 
-        # ORDER: [timestep, soc, soc_target, energy_price, soc_initial, battery_capacity, out_start, out_end, return_start, return_end, home_charge_power, work_charge_power, location]
+        # ORDER: [timestep, soc, soc_target, energy_price, battery_capacity, out_start, out_end, return_start, return_end, home_charge_power, work_charge_power, location]
 
         # --- Extract continuous values ---
         continuous_obs = episode_data[[
@@ -75,19 +127,15 @@ def load_trajectories(input_file, output_file=None):
             'SoC',
             'SoC_target',
             'Energy_Price_Pounds',
-            'Initial Energy Percent',
             'Battery_Capacity_kWh',
-            'out_start_timestep',
-            'out_end_timestep',
-            'return_start_timestep',
-            'return_end_timestep',
+            'timesteps_to_next_journey',
             'Home_Charger_kW',
             'Work_Charger_kW'
         ]].values.astype(np.float64)    
 
         # --- Extract location as one-hot encoding ---
         loc_indices = episode_data['loc_int'].values
-        loc_onehot = np.eye(5)[loc_indices].astype(np.float64)
+        loc_onehot = np.eye(2)[loc_indices].astype(np.float64)
 
         # --- Combine continuous and one-hot observations ---
         observations = np.hstack([continuous_obs, loc_onehot])
@@ -98,17 +146,10 @@ def load_trajectories(input_file, output_file=None):
         episodes.append({
             'episodeID': episode_id,
             'segment': episode_data['Segment'].iloc[0],
+            'initial_values': initial_values,
             'observations': observations.tolist(),
             'actions': actions.tolist()
         })
-
-    # Check if energy price array in every episode is exactly the same 
-    first_episode_prices = episodes[0]['observations']
-    for ep in episodes[1:]:
-        if not np.array_equal(np.array(first_episode_prices)[:,3], np.array(ep['observations'])[:,3]):
-            print("Warning: Energy price profiles differ between episodes.")
-            break
-    print("All episodes have consistent energy price profiles.")
 
     # --- SAVE TO JSON ---
     print(f"Extracted {len(episodes)} valid episodes, saving to JSON...")
