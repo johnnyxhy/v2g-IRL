@@ -266,7 +266,7 @@ class V2GEnv_MultiTimestep(gym.Env):
         else:
             self.time_to_next_journey = max(0, self.time_to_next_journey - (timesteps_needed if action != 0.0 else 1))
 
-        # --- CALCULATE PROFITS ---
+        # --- TODO: UPDATE CALCULATE PROFITS ---
         energy_price = self.energy_price_profile[min(self.timestep, 95)]
         self.accumulated_profit += -action * battery_cap * energy_price
 
