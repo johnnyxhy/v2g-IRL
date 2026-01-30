@@ -11,7 +11,7 @@ from stable_baselines3.common.monitor import Monitor
 # --- Register env once (safe to keep here) ---
 gym.register(
     id="V2GEnv-single",
-    entry_point="irl.envs.V2GEnv_Single:V2GEnv_SingleTimestep",
+    entry_point="irl.envs.V2GEnv:V2GEnv",
     max_episode_steps=96,
 )
 
@@ -99,8 +99,7 @@ if __name__ == "__main__":
     print("Post-train eval returns:", post_all)
 
     # 8) Save with timestamp to avoid overwriting
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    save_path = f"./models/sac_v2g_smoke_test_{ts}"
+    save_path = f"./models/sac_v2g_smoke_test"
     model.save(save_path)
     print("Saved model to:", save_path + ".zip")
 

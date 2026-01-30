@@ -3,24 +3,22 @@ import gymnasium as gym
 from stable_baselines3 import SAC
 import matplotlib.pyplot as plt
 from stable_baselines3.common.vec_env import DummyVecEnv
+import json
 
 gym.register(
     id='V2GEnv-single',
-    entry_point="irl.envs.V2GEnv_Single:V2GEnv_SingleTimestep",
+    entry_point="irl.envs.V2GEnv:V2GEnv",
     max_episode_steps=96,
 )
 
-def make_env():
+def make_env(initial_states=None):
     env = gym.make('V2GEnv-single')
+
+    if initial_states is not None:
+        env.set_initial_states(initial_states)
 
     return env
 
-# Load the trained model
-model = SAC.load("./models/sac_v2g_smoke_test_20260120_195950")
-
-env = make_env()
-
-vec_env = DummyVecEnv([make_env])
 
 def extract_trajectory(obs, trajectory):
     trajectory['timestep'] = np.append(trajectory['timestep'], obs['timestep'])
@@ -30,6 +28,9 @@ def extract_trajectory(obs, trajectory):
     trajectory['time_to_next_journey'] = np.append(trajectory['time_to_next_journey'], obs['time_to_next_journey'])
 
 if __name__ == "__main__":
+
+    # Initialize trajectory storage
+
     trajectories = {
         'timestep': np.array([], dtype=int),
         'soc': np.array([], dtype=np.float32),
@@ -41,17 +42,39 @@ if __name__ == "__main__":
 
     accumulated_reward = [0.0]
 
+    # Extract initial states from expert json
+    with open("data/processed_trajectories.json", "r") as f:
+        expert_data = json.load(f)
+
+    expert_index = 2
+
+    # Extract the first trajectory's initial state
+    initial_states = expert_data[expert_index]['initial_values']
+
+    # Load the trained model
+    model = SAC.load("./models/sac_v2g_smoke_test")
+
+    vec_env = DummyVecEnv([lambda: make_env(initial_states=initial_states)])
+
     obs = vec_env.reset()
     extract_trajectory(obs, trajectories)
     print(obs)
     
     while True:
         action, _states = model.predict(obs, deterministic=True)
+
         obs, rewards, done, info = vec_env.step(action)
         trajectories['reward'] = np.append(trajectories['reward'], rewards[0])
         accumulated_reward.append(accumulated_reward[-1] + rewards[0])
         if done[0]:
             terminal_obs = info[0]["terminal_observation"]
+            soc_history = info[0]["soc_history"]
+            out_start_timestep = info[0]["out_start_timestep"]
+            return_start_timestep = info[0]["return_start_timestep"]
+            out_duration = info[0]["out_duration"]
+            return_duration = info[0]["return_duration"]
+            print("Lenght of soc history:", len(soc_history))
+
             extract_trajectory(terminal_obs, trajectories)
             break
         else:
@@ -59,44 +82,21 @@ if __name__ == "__main__":
     
    
 
-    # Plot the results
-    fig, ax1 = plt.subplots(figsize=(12, 8))
+   # Plot SOC over timesteps
+    plt.figure()
+    plt.plot(range(len(soc_history)), soc_history, label='SoC')
 
-# Left y-axis: SoC, target, price
-    ax1.scatter(
-        trajectories['timestep'],
-        trajectories['soc'],
-        label='State of Charge (SoC)'
-    )
-    ax1.scatter(
-        trajectories['timestep'],
-        trajectories['soc_target'],
-        label='Target SoC'
-    )
-    ax1.plot(
-        trajectories['timestep'],
-        trajectories['energy_price'],
-        label='Energy Price',
-        linestyle=':'
-    )
+    # Plot expert SoC
+    expert_soc = expert_data[expert_index]['soc_history']
+    plt.plot(range(len(expert_soc)), expert_soc, label='Expert SoC', linestyle='--')
 
-    ax1.set_xlabel('Timestep')
-    ax1.set_ylabel('SoC / Price')
+    # Mark with colored regions the out and return journeys
+    plt.axvspan(out_start_timestep, out_start_timestep + out_duration, color='red', alpha=0.3, label='Out Journey')
+    plt.axvspan(return_start_timestep, return_start_timestep + return_duration, color='blue', alpha=0.3, label='Return Journey')
 
-    # Right y-axis: accumulated reward
-    ax2 = ax1.twinx()
-    ax2.plot(
-        trajectories['timestep'],
-        accumulated_reward,
-        label='Accumulated Reward',
-        linestyle='-.'
-    )
-    ax2.set_ylabel('Accumulated Reward')
-
-    # Combine legends from both axes
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc='best')
+    plt.xlabel('Timestep')
+    plt.ylabel('State of Charge (SoC)')
+    plt.legend()
 
     plt.title('V2G Environment Evaluation')
     plt.show()

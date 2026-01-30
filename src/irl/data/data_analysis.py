@@ -40,6 +40,11 @@ trip_journey_time = extract_values(df, 'Trip_Journey_Time_Timesteps', 0)
 return_journey_time = extract_values(df, 'Return_Journey_Time_Timesteps', 0)
 journey_time = np.concatenate([trip_journey_time, return_journey_time])
 
+journey_distance = extract_values(df, 'Upcoming_Journey_Distance_Miles', 0)
+out_speed = extract_values(df, 'Average_Speed_Out_mph', 0)
+return_speed = extract_values(df, 'Average_Speed_Return_mph', 0)
+journey_speed = np.concatenate([out_speed, return_speed])
+
 # --- 5. PERFORM FITTING ---
 def fit_distribution(data, distribution_name, floc = 0):
     distribution = getattr(stats, distribution_name)
@@ -108,12 +113,34 @@ def plot_distribution_fit_manual(data, distribution_name, bins=30, name='Data', 
     plt.legend()
     plt.tight_layout()
 
+# Exponential distribution plot
+def plot_exponential_fit(data, bins=30, name='Data'):
+    plt.figure()
+
+    plt.hist(data, bins=bins, density=True, alpha=0.5, color='g', label='Data Histogram')
+
+    data_min, data_max = np.min(data), np.max(data)
+    x = np.linspace(data_min, data_max, 500)
+
+    loc, scale = stats.expon.fit(data)
+    plt.plot(x, stats.expon.pdf(x, loc=loc, scale=scale), linewidth=2, label=f"Exponential (loc={loc:.4f}, scale={scale:.4f})")
+
+    plt.title(f'Exponential Distribution Fit for {name}')
+    plt.xlabel('Value')
+    plt.ylabel('Density')
+    plt.legend()
+    plt.tight_layout()
+
+    print(f"Fitted parameters for {name} (exponential): loc={loc}, scale={scale}")
+
 # --- EXAMPLE USAGE ---
 plot_distribution_fit(soc_initial, 'norm', bins=50, name='Initial SoC')
 plot_distribution_fit(energy_per_journey_minute, 'gamma', bins=50, name='Energy per Journey Minute')
 plot_distribution_fit(out_start_timestep, 'gamma', bins=30, name='Out Start Timestep')
 plot_distribution_fit(return_start_timestep, 'gamma', bins=30, name='Return Start Timestep', floc=20)
 plot_distribution_fit(journey_time, 'gamma', bins=30, name='Journey Time', floc=0)
+plot_distribution_fit(journey_speed, 'gamma', bins=30, name='Journey Speed')
+plot_exponential_fit(journey_distance, bins=50, name='Journey Distance')
 
 
 #plot_distribution_fit_manual(out_start_timestep, 'gamma', bins=70, name='Out Start Timestep', params=(20, 0, 1), floc=0)
