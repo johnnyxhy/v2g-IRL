@@ -4,7 +4,7 @@ from irl.dataset.expert_dataset_simple import ExpertDatasetSimple
 from irl.MaxEnt.MaxEnt_simple import MaxEntIRLTrainer_Simple, MaxEntConfig
 
 dataset = ExpertDatasetSimple()
-dataset.load_trajectories_from_json("data/processed_trajectories_simple.json")
+dataset.load_trajectories_from_json("data/processed_trajectories_simple_probabilistic.json")
 
 # Register environment
 gym.register(
@@ -19,7 +19,7 @@ cfg.n_epochs = 20
 cfg.rollout_samples = 10
 cfg.segment = "Male 50-59"
 cfg.policy_train_steps_per_iter = 10_000
-cfg.folder_name = "MaxEntIRL_simple_exp4_2"
+cfg.folder_name = "MaxEntIRL_simple_probabilistic_exp1"
 cfg.validation = True
 
 trainer = MaxEntIRLTrainer_Simple(

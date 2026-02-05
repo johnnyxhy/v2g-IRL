@@ -225,4 +225,4 @@ def load_trajectories(input_file, output_file=None):
 
 
 # Example usage:
-episodes = load_trajectories("data/EVdataset_simple.csv", output_file="data/processed_trajectories_simple.json")
+episodes = load_trajectories("data/EVdataset_simple_probabilistic.csv", output_file="data/processed_trajectories_simple_probabilistic.json")
