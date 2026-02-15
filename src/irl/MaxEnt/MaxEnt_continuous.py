@@ -1,12 +1,13 @@
 import numpy as np
 import gymnasium as gym
-from stable_baselines3 import SAC
+from sbx import SAC
 import matplotlib.pyplot as plt
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.common.monitor import Monitor
 from irl.dataset.expert_dataset_continuous import ExpertDatasetContinuous
 from irl.utils.tools import AdamOptimizer, compute_dtw
 from tqdm import tqdm
+import math
 
 
 class MaxEntConfig:
@@ -49,9 +50,10 @@ class MaxEntIRLTrainer_Continuous:
         self.train_dtw_distance = []
         self.val_l2_loss = []
         self.val_dtw_distance = []
+        self.reward_weights_history = []
 
         # Register optimiser
-        self.optimizer = AdamOptimizer(params_shape=self.reward_weights.shape, lr=self.cfg.reward_lr)
+        #self.optimizer = AdamOptimizer(params_shape=self.reward_weights.shape, lr=self.cfg.reward_lr)
 
         print(f"MaxEnt IRL Trainer initialized with {len(self.train_set)} training samples and {len(self.val_set)} validation samples.")
 
@@ -65,6 +67,9 @@ class MaxEntIRLTrainer_Continuous:
         env = gym.make(self.env_name)
         env = Monitor(env, filename=f"./models/{self.cfg.folder_name}/monitor.csv")
         vec_env = DummyVecEnv([lambda: env])
+
+        # Normalise rewards for training
+        vec_env = VecNormalize(vec_env, norm_obs=False, norm_reward=True, clip_obs=10.0, clip_reward=10.0)
 
         # create rollout env 
         rollout_env = gym.make(self.env_name)
@@ -83,11 +88,11 @@ class MaxEntIRLTrainer_Continuous:
             tensorboard_log=f"./models/{self.cfg.folder_name}/tensorboard/",
             
             # --- SAC Specific Parameters ---
-            buffer_size=1_000_000,  # Size of the replay buffer (standard is 1M)
-            learning_starts=100,    # Steps to collect random data before learning starts
-            ent_coef='auto',        # Automatically adjust temperature (Recommended)
-            train_freq=1,           # Update the model every step
-            gradient_steps=1,       # How many gradient updates to do per step
+            buffer_size=100_000,  # Size of the replay buffer
+            learning_starts=1_000,    # Steps to collect random data before learning starts
+            ent_coef=0.1,           # Manually set the entropy coefficient 
+            train_freq=1,           # Update the model every n step
+            gradient_steps=1,       # How many gradient updates to do per n step
         )
 
         for epoch in range(self.cfg.n_epochs):
@@ -134,6 +139,7 @@ class MaxEntIRLTrainer_Continuous:
                 # Perform rollouts with current policy and expert initial states
                 for i in range(self.cfg.rollout_samples):
                     rollout_env.envs[0].unwrapped.set_initial_states(traj.initial_values)
+                    rollout_env.envs[0].unwrapped.set_reward_weights(self.reward_weights)
                     obs = rollout_env.reset()
 
                     done = False
@@ -166,7 +172,7 @@ class MaxEntIRLTrainer_Continuous:
                 traj_feat_exp = np.dot(weights, traj_feat_exp_arr)
                 
                 # Update gradient
-                grad += (expert_feat_exp - traj_feat_exp)
+                grad += (expert_feat_exp - traj_feat_exp) / N
 
                 # Update averages for monitoring
                 avg_expert_feat_exp += expert_feat_exp / N
@@ -177,7 +183,7 @@ class MaxEntIRLTrainer_Continuous:
                 average_l2_loss += l2_loss / N  
             
             # Update reward weights
-            self.reward_weights = self.optimizer.step(self.reward_weights, grad / N)
+            self.reward_weights += self.cfg.reward_lr * grad
 
             # --- VALIDATION ----
 
@@ -230,9 +236,12 @@ class MaxEntIRLTrainer_Continuous:
                 self.val_l2_loss.append(val_loss)
                 self.val_dtw_distance.append(val_dtw_distance)
 
+            self.reward_weights_history.append(self.reward_weights.copy())
+
             print(f"--- Epoch {epoch+1}/{self.cfg.n_epochs} Summary ---")
             print(f"Avg L2 Loss: {average_l2_loss:.4f}, Avg DTW Distance: {avg_dtw_distance:.4f}")
-            print(f"Avg Expert Feature Expectation: {avg_expert_feat_exp}, Avg Traj Feature Expectation: {avg_traj_feat_exp}")
+            print(f"Avg Expert Feature Expectation: {avg_expert_feat_exp}")
+            print(f"Avg Traj   Feature Expectation: {avg_traj_feat_exp}")
             print(f"Updated Reward Weights: {self.reward_weights}")
             print(f"Avg Episode Length: {avg_episode_length:.2f}")
             if self.cfg.validation and len(self.val_set) > 0:
@@ -243,9 +252,9 @@ class MaxEntIRLTrainer_Continuous:
         
         # --- PLOTTING ---
         plt.figure(1)
-        plt.plot(range(1, self.cfg.n_epochs + 1), self.train_l2_loss, marker='o')
+        plt.plot(range(1, self.cfg.n_epochs + 1), self.train_l2_loss)
         if self.cfg.validation and len(self.val_set) > 0:
-            plt.plot(range(1, self.cfg.n_epochs + 1), self.val_l2_loss, marker='o')
+            plt.plot(range(1, self.cfg.n_epochs + 1), self.val_l2_loss)
             plt.legend(['Train L2 Loss', 'Validation L2 Loss'])
 
         plt.title('MaxEnt IRL L2 Loss')
@@ -255,16 +264,55 @@ class MaxEntIRLTrainer_Continuous:
         plt.savefig(f'./models/{self.cfg.folder_name}/maxent_irl_training_loss.png')
 
         plt.figure(2)
-        plt.plot(range(1, self.cfg.n_epochs + 1), self.train_dtw_distance, marker='o')
+        plt.plot(range(1, self.cfg.n_epochs + 1), self.train_dtw_distance)
         if self.cfg.validation and len(self.val_set) > 0:
-            plt.plot(range(1, self.cfg.n_epochs + 1), self.val_dtw_distance, marker='o')
+            plt.plot(range(1, self.cfg.n_epochs + 1), self.val_dtw_distance)
             plt.legend(['Train DTW Distance', 'Validation DTW Distance'])
         plt.title('MaxEnt IRL DTW Distance')
         plt.xlabel('Epoch')
         plt.ylabel('Average DTW Distance')
         plt.grid()
         plt.savefig(f'./models/{self.cfg.folder_name}/maxent_irl_training_dtw_distance.png')
-        
+
+        # Plot reward weights evolution
+        reward_weights_history_arr = np.array(self.reward_weights_history)
+        n_weights = reward_weights_history_arr.shape[1]
+        epochs = range(1, self.cfg.n_epochs + 1)
+
+        # Dynamic grid calculation
+        ncols = 2
+        nrows = math.ceil(n_weights / ncols)
+
+        fig, axes = plt.subplots(nrows, ncols, figsize=(12, 3 * nrows), sharex=True)
+        axes_flat = axes.flatten()
+
+        for i in range(n_weights):
+            ax = axes_flat[i]
+            ax.plot(epochs, reward_weights_history_arr[:, i], color=f'C{i}', linewidth=2)
+            ax.set_title(f'Weight {i+1}')
+            ax.set_ylabel('Value')
+            ax.grid(True, linestyle='--', alpha=0.5)
+
+        # Hide any unused subplots (e.g., if n_weights is 7 but grid is 8)
+        for j in range(i + 1, len(axes_flat)):
+            axes_flat[j].axis('off')
+
+        # Ensure the bottom-most visible plots have x-axis labels
+        for j in range(n_weights):
+            # If the plot below this one is hidden or doesn't exist, it's a bottom plot
+            if j + ncols >= n_weights:
+                axes_flat[j].set_xlabel('Epoch')
+
+        plt.suptitle('Reward Weights Evolution Across Epochs', fontsize=16)
+        plt.tight_layout(rect=[0, 0.03, 1, 0.97])
+
+        # Save the figure
+        save_path = f'./models/{self.cfg.folder_name}/maxent_irl_reward_weights_evolution_dynamic.png'
+        plt.savefig(save_path)
+
+        # Save final reward weights to a text file
+        np.savetxt(f'./models/{self.cfg.folder_name}/final_reward_weights.txt', self.reward_weights, fmt='%.6f')
+
         plt.show()
 
         print("Training completed")

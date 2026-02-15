@@ -5,6 +5,8 @@ __pycache__/
 
 # Ignore trained models for now
 #models/
+*.zip
+tensorboard/
 
 # C extensions
 *.so

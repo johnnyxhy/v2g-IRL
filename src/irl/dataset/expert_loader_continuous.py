@@ -78,11 +78,8 @@ def load_trajectories(input_file, output_file=None):
     df.loc[first_timesteps, 'SoC'] = df.loc[first_timesteps, 'Initial_Energy_kWh'] / df.loc[first_timesteps, 'Battery_Capacity_kWh']
 
     # --- 7. Convert Total Charge to Percentage of Battery Capacity ---
-    df['Charge_Action'] = np.select([df['Action'] == 'charge', df['Action'] == 'discharge', df['Action'] == 'none'],
-                                    [df['Total_Charge_kWh'] / df['Battery_Capacity_kWh'],
-                                    -df['Total_Discharge_kWh'] / df['Battery_Capacity_kWh'],
-                                    0.0],
-                                    default=0.0)
+    df['amount_charged'] = (df['Total_Charge_kWh'] / df['Battery_Capacity_kWh']).fillna(0.0) 
+    df['amount_discharged'] = (df['Total_Discharge_kWh'] / df['Battery_Capacity_kWh']).fillna(0.0)
     
     # --- 8. Map Battery Capacity and Charging Power to index --- 
     battery_cap_map = {40: 0, 60: 1, 80: 2}
@@ -91,21 +88,11 @@ def load_trajectories(input_file, output_file=None):
     df['home_charge_index'] = df['Home_Charger_kW'].map(home_charge_map)
     work_charge_map = {7.4: 0, 11: 1, 22: 2}
     df['work_charge_index'] = df['Work_Charger_kW'].map(work_charge_map)
-
-    # --- 9. Map Charging actions to index ---
-    charge_action_map = {'charge': 0, 'discharge': 1, 'none': 2}
-    df['charge_action_index'] = df['Action'].map(charge_action_map)
     
     # --- 10. Battery needed and exceeded target ---
-    df['battery_needed_target'] = np.maximum(0.0, df['SoC_target'] - df['SoC_end'])
-    df['battery_exceeded_target'] = np.maximum(0.0, df['SoC_end'] - df['SoC_target'])
+    df['battery_needed_target'] = (np.maximum(0.0, df['SoC_target'] - df['SoC_end'])) ** 2
+    df['battery_exceeded_target'] = (np.maximum(0.0, df['SoC_end'] - df['SoC_target'])) ** 2
 
-    # --- 11. SoC outside acceptable range, default 0.0 ---
-    df['soc_outside_range'] = np.select(
-        [df['SoC_end'] < 0.2, df['SoC_end'] > 0.8],
-        [0.2 - df['SoC_end'], df['SoC_end'] - 0.8],
-        default=0.0
-    )
     # --- 12. Journey failure ---
     # Decided if in row above, location is driving_out or driving_return and SoC_end == 0
     df['journey_failure'] = np.where(
@@ -117,6 +104,13 @@ def load_trajectories(input_file, output_file=None):
         0.0
     )
     df['journey_failure'] = df['journey_failure'].fillna(0.0)
+
+    # --- 13. Charge Action Taken --
+    df['charge_action_taken'] = np.where(
+        (df['amount_charged'] > 0) | (df['amount_discharged'] > 0),
+        1,
+        0
+    )
 
     # --- EXTRACT EPISODES ---
     grouped = df.groupby('EpisodeID')
@@ -158,13 +152,15 @@ def load_trajectories(input_file, output_file=None):
         episode_data = episode_data[(episode_data.index == 0) | (episode_data['Action_Duration_Timesteps'].shift(1) == 0)].reset_index(drop=True)
 
         # --- EXTRACT FEATURES ---
-        # [battery_needed_target, battery_exceeded_target, soc_outside_range, journey_failure]
+        # [amount_charged, amount_discharged, battery_needed_target, battery_exceeded_target, soc_outside_range, journey_failure]
 
         features = episode_data[[
+            'amount_charged',
+            'amount_discharged',
             'battery_needed_target',
             'battery_exceeded_target',
-            'soc_outside_range',
             'journey_failure',
+            'charge_action_taken'
         ]].values.astype(np.float64)
 
         # Calculate feature expectations 

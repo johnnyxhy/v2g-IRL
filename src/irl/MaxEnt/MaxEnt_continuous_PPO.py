@@ -2,8 +2,8 @@ import numpy as np
 import gymnasium as gym
 from stable_baselines3 import PPO
 import matplotlib.pyplot as plt
-from stable_baselines3.common.vec_env import DummyVecEnv
-from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
+from stable_baselines3.common.env_util import make_vec_env
 from irl.dataset.expert_dataset_continuous import ExpertDatasetContinuous
 from irl.utils.tools import AdamOptimizer, compute_dtw
 from tqdm import tqdm
@@ -61,16 +61,22 @@ class MaxEntIRLTrainer_Continuous:
         Train the MaxEnt IRL model
         """
 
+        num_cpu = 8
+
         # Create training environment
-        env = gym.make(self.env_name)
-        env = Monitor(env, filename=f"./models/{self.cfg.folder_name}/monitor.csv")
-        vec_env = DummyVecEnv([lambda: env])
+        vec_env = make_vec_env(
+            self.env_name,
+            n_envs=num_cpu,
+            vec_env_cls=SubprocVecEnv,
+            env_kwargs={'render_mode': None}
+        )
+
+        # add monitor to log episode rewards and lengths
+        vec_env = VecMonitor(vec_env, filename=f"./models/{self.cfg.folder_name}/monitor.csv")
 
         # create rollout env 
         rollout_env = gym.make(self.env_name)
         rollout_env = DummyVecEnv([lambda: rollout_env])
-
-        # Add Monitor
 
         model = PPO(
                 policy="MultiInputPolicy",
@@ -104,8 +110,11 @@ class MaxEntIRLTrainer_Continuous:
 
             # Train PPO policy with current reward weights
             
-            vec_env.envs[0].unwrapped.set_reward_weights(self.reward_weights)
-            vec_env.envs[0].unwrapped.set_initial_states(None)
+            # Calls set_reward_weights(self.reward_weights) on every subprocess
+            vec_env.env_method("set_reward_weights", self.reward_weights)
+
+            # Calls set_initial_states(None) on every subprocess
+            vec_env.env_method("set_initial_states", None)
 
             model.learn(total_timesteps=self.cfg.policy_train_steps_per_iter,tb_log_name=f"epoch_{epoch+1}", progress_bar=True)
 
@@ -127,7 +136,7 @@ class MaxEntIRLTrainer_Continuous:
 
                 # Perform rollouts with current policy and expert initial states
                 for i in range(self.cfg.rollout_samples):
-                    rollout_env.envs[0].unwrapped.set_initial_states(traj.initial_values)
+                    rollout_env.env_method("set_initial_states", traj.initial_values)
                     obs = rollout_env.reset()
 
                     done = False
@@ -160,7 +169,7 @@ class MaxEntIRLTrainer_Continuous:
                 traj_feat_exp = np.dot(weights, traj_feat_exp_arr)
                 
                 # Update gradient
-                grad += (expert_feat_exp - traj_feat_exp)
+                grad += (expert_feat_exp - traj_feat_exp) / N
 
                 # Update averages for monitoring
                 avg_expert_feat_exp += expert_feat_exp / N
@@ -196,7 +205,7 @@ class MaxEntIRLTrainer_Continuous:
                     rewards_arr = np.zeros(n_samples, dtype=np.float32)
 
                     # Perform single deterministic rollout with current policy and expert initial states
-                    rollout_env.envs[0].unwrapped.set_initial_states(traj.initial_values)
+                    rollout_env.env_method("set_initial_states", traj.initial_values)
                     obs = rollout_env.reset()
                     done = False
                     while not done:

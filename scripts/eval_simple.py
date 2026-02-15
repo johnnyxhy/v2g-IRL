@@ -38,7 +38,7 @@ if __name__ == "__main__":
     with open("data/processed_trajectories_simple_probabilistic.json", "r") as f:
         expert_data = json.load(f)
 
-    expert_index = 0
+    expert_index = 6
 
     # Extract the first trajectory's initial state
     initial_states = expert_data[expert_index]['initial_values']

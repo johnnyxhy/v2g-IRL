@@ -1,6 +1,6 @@
 import numpy as np
 import gymnasium as gym
-from stable_baselines3 import PPO
+from sbx import SAC, PPO
 import matplotlib.pyplot as plt
 from stable_baselines3.common.vec_env import DummyVecEnv
 from irl.utils.tools import compute_dtw
@@ -16,7 +16,7 @@ def extract_trajectory(obs, trajectory):
     trajectory['timestep'] = np.append(trajectory['timestep'], obs['timestep'])
     trajectory['soc'] = np.append(trajectory['soc'], obs['soc'][0])
     trajectory['soc_target'] = np.append(trajectory['soc_target'], obs['soc_target'][0])
-    trajectory['energy_price'] = np.append(trajectory['energy_price'], obs['energy_price'][0])
+    #trajectory['energy_price'] = np.append(trajectory['energy_price'], obs['energy_price'][0])
     trajectory['time_to_next_journey'] = np.append(trajectory['time_to_next_journey'], obs['time_to_next_journey'])
 
 if __name__ == "__main__":
@@ -27,7 +27,7 @@ if __name__ == "__main__":
         'timestep': np.array([], dtype=int),
         'soc': np.array([], dtype=np.float32),
         'soc_target': np.array([], dtype=np.float32),
-        'energy_price': np.array([], dtype=np.float32),
+        #'energy_price': np.array([], dtype=np.float32),
         'time_to_next_journey': np.array([], dtype=int),
         'reward': np.array([0], dtype=np.float32),
     }
@@ -38,18 +38,47 @@ if __name__ == "__main__":
     with open("data/processed_trajectories_continuous.json", "r") as f:
         expert_data = json.load(f)
 
-    expert_index = 0
-
-    # Extract the first trajectory's initial state
-    initial_states = expert_data[expert_index]['initial_values']
-
     # Load the trained model
-    model = PPO.load("./models/MaxEntIRL_continuous_exp2/maxent_irl_epoch20")
-
+    model = SAC.load("./models/MaxEntIRL_continuous_v4_exp3/maxent_irl_epoch100")
+    
     vec_env = DummyVecEnv([lambda: gym.make('V2GEnv-continuous')])
-    vec_env.envs[0].unwrapped.set_initial_states(initial_states)
 
-    def evaluate():
+    # Find expert indexes corresponding to segment
+    def find_expert_indexes(segment):
+        indexes = []
+        for i, traj in enumerate(expert_data):
+            if traj['segment'] == segment:
+                indexes.append(i)
+        return indexes
+
+    # Plotting function to evaluate a specific expert trajectory
+    def plot_expert_trajectory(soc_history, expert_index, out_start_timestep, return_start_timestep, out_duration, return_duration, dtw_distance):
+        # Plot SOC over timesteps
+        plt.figure()
+        plt.plot(range(len(soc_history)), soc_history, label='SoC')
+
+        # Plot expert SoC
+        expert_soc = expert_data[expert_index]['soc_history']
+        plt.plot(range(len(expert_soc)), expert_soc, label='Expert SoC', linestyle='--')
+
+        # Mark with colored regions the out and return journeys
+        plt.axvspan(out_start_timestep, out_start_timestep + out_duration, color='red', alpha=0.3, label='Out Journey')
+        plt.axvspan(return_start_timestep, return_start_timestep + return_duration, color='blue', alpha=0.3, label='Return Journey')
+
+        plt.xlabel('Timestep')
+        plt.ylabel('State of Charge (SoC)')
+        plt.legend()
+
+        plt.title('V2G Environment Evaluation with DTW Distance: {:.2f} for Trajectory {}'.format(dtw_distance, expert_index))
+        plt.show()
+
+    def evaluate(expert_index):
+
+        # Extract the first trajectory's initial state
+        initial_states = expert_data[expert_index]['initial_values']
+        vec_env.envs[0].unwrapped.set_initial_states(initial_states)
+        vec_env.envs[0].unwrapped.set_reward_weights(np.array([2, 2, -0.5, -0.5, -10, 1], dtype=np.float32))
+
         obs = vec_env.reset()
         extract_trajectory(obs, trajectories)
         print(obs)
@@ -57,10 +86,13 @@ if __name__ == "__main__":
         while True:
             action, _states = model.predict(obs, deterministic=True)
 
-            # Print every action taken
-            print(f"Action taken at timestep {obs['timestep'][0]}: {action[0]}")
-
             obs, rewards, done, info = vec_env.step(action)
+
+            # Print every action taken
+            print(f"Action taken at timestep {obs['timestep'][0]}: {action[0]} with reward: {rewards[0]} with soc: {obs['soc'][0]} and soc target: {obs['soc_target'][0]}")
+            # print feature expectation from info
+            print(f"Features at timestep {obs['timestep'][0]}: {info[0]['features']}")
+
             trajectories['reward'] = np.append(trajectories['reward'], rewards[0])
             accumulated_reward.append(accumulated_reward[-1] + rewards[0])
 
@@ -80,36 +112,32 @@ if __name__ == "__main__":
                 break
             else:
                 extract_trajectory(obs, trajectories)
-        
-        # Print Expert Feature Expectation
-        print("Expert Feature Expectation:", expert_data[expert_index]['feature_expectation'])
 
         # Compute DTW distance between expert and agent SoC trajectories
         dtw_distance = compute_dtw(
             np.array(expert_data[expert_index]['soc_history'], dtype=np.float32),
             np.array(soc_history, dtype=np.float32)
         )
-        print(f"DTW Distance between expert and agent SoC trajectories: {dtw_distance}")
 
-        # Plot SOC over timesteps
+        plot_expert_trajectory(soc_history, expert_index, out_start_timestep, return_start_timestep, out_duration, return_duration, dtw_distance)
+
+        # Plot accumulated reward over time
         plt.figure()
-        plt.plot(range(len(soc_history)), soc_history, label='SoC')
-
-        # Plot expert SoC
-        expert_soc = expert_data[expert_index]['soc_history']
-        plt.plot(range(len(expert_soc)), expert_soc, label='Expert SoC', linestyle='--')
-
-        # Mark with colored regions the out and return journeys
-        plt.axvspan(out_start_timestep, out_start_timestep + out_duration, color='red', alpha=0.3, label='Out Journey')
-        plt.axvspan(return_start_timestep, return_start_timestep + return_duration, color='blue', alpha=0.3, label='Return Journey')
-
+        plt.plot(range(len(accumulated_reward)), accumulated_reward, label='Accumulated Reward')
         plt.xlabel('Timestep')
-        plt.ylabel('State of Charge (SoC)')
+        plt.ylabel('Accumulated Reward')
+        plt.title('Accumulated Reward over Time for Trajectory {}'.format(expert_index))
         plt.legend()
-
-        plt.title('V2G Environment Evaluation with DTW Distance: {:.2f}'.format(dtw_distance))
         plt.show()
 
-    evaluate()
-    
+
+# Evaluate on first 5 trajectories of the specified segment
+    segment = "Male 50-59"
+    expert_indexes = find_expert_indexes(segment)
+    for idx in expert_indexes[:5]:
+        print(f"Evaluating trajectory {idx} from segment {segment}")
+        evaluate(idx)
+
+        
+
     
