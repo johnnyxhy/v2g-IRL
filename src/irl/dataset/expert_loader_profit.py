@@ -105,12 +105,10 @@ def load_trajectories(input_file, output_file=None):
     )
     df['journey_failure'] = df['journey_failure'].fillna(0.0)
 
-    # --- 13. Charge Action Taken --
-    df['charge_action_taken'] = np.where(
-        (df['amount_charged'] > 0) | (df['amount_discharged'] > 0),
-        1.0/96.0,  # Scale by max possible amount of charge/discharge in one timestep to keep in range [0,1]
-        0
-    )
+    # --- Charge cost and discharge revenue ---
+    df['charge_cost_step'] = np.where(df['Total_Charge_kWh'] > 0, df['Amount_Charged_During_Timestep_kWh'] * df['Energy_Price_Pounds'], 0.0)
+    df['discharge_revenue_step'] = np.where(df['Total_Discharge_kWh'] > 0, -df['Amount_Charged_During_Timestep_kWh'] * df['Energy_Price_Pounds'], 0.0)
+
 
     # --- EXTRACT EPISODES ---
     grouped = df.groupby('EpisodeID')
@@ -148,6 +146,15 @@ def load_trajectories(input_file, output_file=None):
             'work_charge_power': episode_data['work_charge_index'].iloc[0].item(),
         }
 
+        # --- Sum charge_cost_step and discharge_revenue_step per action ---
+        # An action spans from one action start to the next, where an action start is
+        # the first row or a row where the previous row's Action_Duration_Timesteps == 0
+        action_starts = (episode_data.index == 0) | (episode_data['Action_Duration_Timesteps'].shift(1) == 0)
+        episode_data['action_group'] = action_starts.cumsum()
+        action_sums = episode_data.groupby('action_group')[['charge_cost_step', 'discharge_revenue_step']].transform('sum')
+        episode_data['charge_cost'] = action_sums['charge_cost_step']
+        episode_data['discharge_revenue'] = action_sums['discharge_revenue_step']
+
         # --- Extract only for first entry and when Action_Duration_Timesteps is zero for the row above --- 
         episode_data = episode_data[(episode_data.index == 0) | (episode_data['Action_Duration_Timesteps'].shift(1) == 0)].reset_index(drop=True)
 
@@ -160,12 +167,12 @@ def load_trajectories(input_file, output_file=None):
             'battery_needed_target',
             'battery_exceeded_target',
             'journey_failure',
-            'charge_action_taken',
-            'Energy_Price_Pounds'
+            'charge_cost',
+            'discharge_revenue'
         ]].values.astype(np.float64)
 
         # Calculate feature expectations 
-        feature_expectation = np.sum(features, axis=0)
+        feature_expectation = np.mean(features, axis=0)
 
         # --- EXTRACT OBSERVATIONS ---
 
@@ -215,4 +222,4 @@ def load_trajectories(input_file, output_file=None):
 
 
 # Example usage:
-episodes = load_trajectories("data/EVdataset.csv", output_file="data/processed_trajectories.json")
+episodes = load_trajectories("data/EVdataset_profit.csv", output_file="data/processed_trajectories_profit.json")

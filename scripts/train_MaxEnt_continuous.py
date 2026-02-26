@@ -21,9 +21,9 @@ if __name__ == "__main__":
     cfg.reward_lr_end = 0.01 # Decay reward LR from 1 to 0.01 over training — allows larger initial
     cfg.n_epochs = 5
     cfg.rollout_samples = 20
-    cfg.segment = "Male 50-59"
+    cfg.segment = "Female 50-59"
     cfg.policy_train_steps_per_iter = 100_000
-    cfg.folder_name = "MaxEntIRL_continuous_v7_exp5(No norm)"
+    cfg.folder_name = "MaxEntIRL_continuous_v7_exp6(Female 50-59)"
     cfg.validation = True
 
     trainer = MaxEntIRLTrainer_Continuous(

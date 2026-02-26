@@ -35,7 +35,7 @@ if __name__ == "__main__":
     accumulated_reward = [0.0]
 
     # Extract initial states from expert json
-    with open("data/processed_trajectories_profit_simple.json", "r") as f:
+    with open("data/processed_trajectories_profit.json", "r") as f:
         expert_data = json.load(f)
 
     # Load the trained model
