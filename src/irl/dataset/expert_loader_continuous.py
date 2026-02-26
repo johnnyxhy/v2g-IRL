@@ -108,7 +108,7 @@ def load_trajectories(input_file, output_file=None):
     # --- 13. Charge Action Taken --
     df['charge_action_taken'] = np.where(
         (df['amount_charged'] > 0) | (df['amount_discharged'] > 0),
-        1,
+        1.0/96.0,  # Scale by max possible amount of charge/discharge in one timestep to keep in range [0,1]
         0
     )
 
@@ -135,6 +135,17 @@ def load_trajectories(input_file, output_file=None):
         # --- ONLY KEEP HOME AND WORK SEGMENTS ---
         episode_data = episode_data[episode_data['Location'].isin(['home', 'work'])].reset_index(drop=True)
 
+        # --- RECOMPUTE battery_needed/exceeded_target USING END-OF-ACTION SoC ---
+        # Currently SoC_end on each row is per-timestep. We want the SoC at the end
+        # of the entire action (last timestep), to match how the env evaluates features.
+        action_starts = (episode_data.index == 0) | (episode_data['Action_Duration_Timesteps'].shift(1) == 0)
+        action_group = action_starts.cumsum()
+        soc_end_of_action = episode_data.groupby(action_group)['SoC_end'].transform('last')
+        action_duration = episode_data.groupby(action_group)['SoC_end'].transform('size')
+
+        episode_data['battery_needed_target'] = (np.maximum(0.0, episode_data['SoC_target'] - soc_end_of_action)) ** 2 * action_duration
+        episode_data['battery_exceeded_target'] = (np.maximum(0.0, soc_end_of_action - episode_data['SoC_target'])) ** 2 * action_duration
+
         # --- EXTRACT INITIAL VALUES ---
         initial_values = {
             'soc': episode_data['SoC'].iloc[0].item(),
@@ -160,11 +171,10 @@ def load_trajectories(input_file, output_file=None):
             'battery_needed_target',
             'battery_exceeded_target',
             'journey_failure',
-            'charge_action_taken'
         ]].values.astype(np.float64)
 
         # Calculate feature expectations 
-        feature_expectation = np.sum(features, axis=0)
+        feature_expectation = np.mean(features, axis=0)
 
         # --- EXTRACT OBSERVATIONS ---
 

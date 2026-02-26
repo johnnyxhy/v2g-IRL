@@ -16,14 +16,13 @@ class V2GEnv(gym.Env):
     Feature Space:
     - amount_charged: soc charged if charging (0-100)
     - amount_discharged: soc discharged if discharging (0-100)
-    - battery_needed_target: squared difference from current SoC to target SoC, 0 if met 
-    - battery_exceeded_target: squared amount by which current SoC exceeds target SoC, 0 if not exceeded
+    - battery_needed_target: squared difference from current SoC to target SoC, 0 if met, multiplied by timesteps
+    - battery_exceeded_target: squared amount by which current SoC exceeds target SoC, 0 if not exceeded, multiplied by timesteps 
     - journey_failure: 1 if unable to complete journey, else 0
-    - charge_action_taken: 1 if charge or discharge, to encourage/discourage charging
 
     """
 
-    def __init__(self, render_mode=None):
+    def __init__(self):
 
         super().__init__()
 
@@ -81,20 +80,18 @@ class V2GEnv(gym.Env):
             0.13, 0.12, 0.11, 0.10, 0.10, 0.09, 0.09, 0.08, 0.08, 0.07, 0.07, 0.07
         ])
 
+        # --- Boundary Reward Penalties for better training --- 
+        self.boundary_penalty_per_kwh = 0.01
+
+        # --- Reward gamma handling ---
+        self.delta_t = 0
+
         # --- INFO TRACKING ---
         self.soc_history = []
         self.accumulated_profit = 0.0
         self.soc_change_this_action = 0.0
         self.accumulated_profit_history = []
-
-        self.feature_history = {
-            'amount_charged': [],
-            'amount_discharged': [],
-            'battery_needed_target': [],
-            'battery_exceeded_target': [],
-            'journey_failure': [],
-            'charge_action_taken': []
-        }
+        self.__reset_feature_history()
 
         # --- DEFINE SPACES ---
 
@@ -126,16 +123,13 @@ class V2GEnv(gym.Env):
         amount_discharged = -self.soc_change_this_action if self.soc_change_this_action < 0.0 else 0.0
 
         # 2. battery_needed_target: difference from current SoC to target SoC, 0 if met
-        battery_needed_target = (max(0.0, self.soc_target - self.soc)) ** 2
+        battery_needed_target = (max(0.0, self.soc_target - self.soc)) ** 2 * self.delta_t
 
         # 3. battery_exceeded_target: amount by which current SoC exceeds target SoC
-        battery_exceeded_target = (max(0.0, self.soc - self.soc_target)) ** 2
+        battery_exceeded_target = (max(0.0, self.soc - self.soc_target)) ** 2 * self.delta_t
 
-        # 5. journey_failure: updated separately in step()
+        # 4. journey_failure: updated separately in step()
         journey_failure = 0.0
-
-        # 6. charge_action_taken: 1 if charge or discharge, to encourage/discourage charging
-        charge_action_taken = 1.0 if self.soc_change_this_action != 0.0 else 0.0
 
         return np.array([
             amount_charged,
@@ -143,9 +137,20 @@ class V2GEnv(gym.Env):
             battery_needed_target,
             battery_exceeded_target,
             journey_failure,
-            charge_action_taken
         ], dtype=np.float32)
     
+    def __reset_feature_history(self):
+        """ 
+        Reset feature history at the start of each episode 
+        """
+        self.feature_history = {
+            'amount_charged': [],
+            'amount_discharged': [],
+            'battery_needed_target': [],
+            'battery_exceeded_target': [],
+            'journey_failure': [],
+        }
+
     def __update_feature_history(self, features):
         """ 
         Update feature history with current feature values 
@@ -158,7 +163,6 @@ class V2GEnv(gym.Env):
         self.feature_history['battery_needed_target'].append(features[2])
         self.feature_history['battery_exceeded_target'].append(features[3])
         self.feature_history['journey_failure'].append(features[4])
-        self.feature_history['charge_action_taken'].append(features[5])
     
     def calculate_feature_expectations(self):
         """ 
@@ -169,12 +173,11 @@ class V2GEnv(gym.Env):
         """
 
         feature_expectations = np.array([
-            np.sum(self.feature_history['amount_charged']),
-            np.sum(self.feature_history['amount_discharged']),
-            np.sum(self.feature_history['battery_needed_target']),
-            np.sum(self.feature_history['battery_exceeded_target']),
-            np.sum(self.feature_history['journey_failure']),
-            np.sum(self.feature_history['charge_action_taken'])
+            np.mean(self.feature_history['amount_charged']),
+            np.mean(self.feature_history['amount_discharged']),
+            np.mean(self.feature_history['battery_needed_target']),
+            np.mean(self.feature_history['battery_exceeded_target']),
+            np.mean(self.feature_history['journey_failure']),
         ], dtype=np.float32)
 
         return feature_expectations
@@ -200,21 +203,24 @@ class V2GEnv(gym.Env):
             'current_charger_power': np.array([current_charger_power], dtype=np.float32)
         }
     
-    def __get_info(self):
+    def __get_info(self, terminal=False, features=None):
         """ 
-        Get additional info as a dictionary 
+        Get additional info as a dictionary.
+        Expensive fields (soc_history, feature_expectation) only included at terminal steps.
         """
+        info = {"delta_t": self.delta_t}
 
-        return {
-            "soc_history": self.soc_history,
-            "accumulated_profit_history": self.accumulated_profit_history,
-            "out_start_timestep": self.out_start_timestep,
-            "return_start_timestep": self.return_start_timestep,
-            "out_duration": self.out_duration,
-            "return_duration": self.return_duration,
-            "features": self.__get_features(),
-            "feature_expectation": self.calculate_feature_expectations()
-        }
+        if terminal:
+            info["soc_history"] = self.soc_history
+            info["accumulated_profit_history"] = self.accumulated_profit_history
+            info["out_start_timestep"] = self.out_start_timestep
+            info["return_start_timestep"] = self.return_start_timestep
+            info["out_duration"] = self.out_duration
+            info["return_duration"] = self.return_duration
+            info["features"] = features if features is not None else self.__get_features()
+            info["feature_expectation"] = self.calculate_feature_expectations()
+
+        return info
 
     def set_initial_states(self, initial_states) -> None:
         """
@@ -253,7 +259,7 @@ class V2GEnv(gym.Env):
 
         # --- INITIALISE REWARD WEIGHTS ---
         if self.reward_weights is None:
-            self.reward_weights = np.array([0.1, 0.1, -1.0, -1.0, -10.0, 1.0], dtype=np.float32)  # Example weights
+            self.reward_weights = np.array([0.1, 0.1, -1.0, -1.0, -10.0], dtype=np.float32)  # Example weights
 
         # --- INITIALISE STATES ---
         
@@ -316,14 +322,7 @@ class V2GEnv(gym.Env):
         self.time_to_next_journey = self.out_start_timestep
 
         # --- CLEAR FEATURE HISTORY ---
-        self.feature_history = {
-            'amount_charged': [],
-            'amount_discharged': [],
-            'battery_needed_target': [],
-            'battery_exceeded_target': [],
-            'journey_failure': [],
-            'charge_action_taken': []
-        }
+        self.__reset_feature_history()
 
         # --- RESET TRACKING INFO ---
         self.soc_history = [self.soc]
@@ -331,7 +330,7 @@ class V2GEnv(gym.Env):
         self.accumulated_profit_history = [0.0]
 
         observation = self.__get_obs()
-        info = self.__get_info()
+        info = self.__get_info(terminal=False)
 
         return observation, info
     
@@ -351,12 +350,13 @@ class V2GEnv(gym.Env):
         """
 
         terminated = False   
-
         truncated = False
+        prev_timestep = self.timestep
 
         # --- CALCULATE CHARGING/DISCHARGING ---
 
         self.soc_change_this_action = 0.0
+        boundary_violation = 0.0
 
         battery_cap = self.battery_capacity_map[self.battery_capacity]
         if self.location == 0:  # At home
@@ -368,14 +368,8 @@ class V2GEnv(gym.Env):
 
         action = action[0]  # Extract scalar from array
 
-        # Restrict precision of action to 2 decimal places to avoid very small charge/discharge amounts
-        action = np.round(action, 2)
-
-        # --- TRIAL: IMMEDIATE PENALTY WHEN DISCHARGING BELOW 0.2 SOC OR CHARGING ABOVE 0.8 SOC, TO ENCOURAGE STAYING WITHIN TARGET RANGE ---
-        if (action > 0.0 and self.soc >= 0.8) or (action < 0.0 and self.soc <= 0.2):
-            bad_discharge = True 
-        else:
-            bad_discharge = False
+        # Restrict precision of action to 3 decimal places to avoid very small charge/discharge amounts
+        action = np.round(action, 3)
 
         # No charging/discharging
         if action == 0.0:
@@ -406,6 +400,7 @@ class V2GEnv(gym.Env):
 
                 if action > 0:  # Charging
                     if self.soc + energy_transfer > 0.8:
+                        boundary_violation += (self.soc + charge_amount_remaining + energy_transfer - 0.8)
                         energy_transfer = 0.8 - self.soc
                         self.soc = 0.8
                         exceeded = True
@@ -414,11 +409,13 @@ class V2GEnv(gym.Env):
                 else:           # Discharging
                     # Check if soc is already at or below 0.2, if so cannot discharge further
                     if self.soc <= 0.2:
+                        boundary_violation += (energy_transfer + charge_amount_remaining)
                         energy_transfer = 0.0
                         exceeded = True
                     elif self.soc - energy_transfer < 0.2:
-                        self.soc = 0.2
+                        boundary_violation += (0.2 - (self.soc - charge_amount_remaining - energy_transfer))
                         energy_transfer = self.soc - 0.2
+                        self.soc = 0.2
                         exceeded = True
                     else:
                         self.soc -= energy_transfer
@@ -438,6 +435,9 @@ class V2GEnv(gym.Env):
                 self.accumulated_profit_history.append(self.accumulated_profit)
                 if exceeded or charge_amount_remaining <= 0.0:
                     break
+        
+        # --- TRACK TIME DISCOUNTING ---
+        self.delta_t = self.timestep - prev_timestep
 
         # --- GET FEATURES
         features = self.__get_features()
@@ -493,25 +493,18 @@ class V2GEnv(gym.Env):
         # --- UPDATE FEATURE HISTORY ---
         self.__update_feature_history(features)
 
-        # --- TODO: REWARD ---
+        # --- REWARD ---
         reward = 0.0
 
         reward = float(np.dot(self.reward_weights, features))
 
-        reward = reward - (10.0 if bad_discharge else 0.0)  # Additional penalty for discharging below 0.2 SOC or charging above 0.8 SOC
-        
+        # Penalize boundary violations
+        if boundary_violation > 0.0:
+            reward -= self.boundary_penalty_per_kwh * boundary_violation * battery_cap
+
         # --- GET NEXT OBSERVATION ---
         observation = self.__get_obs()
 
-        info = self.__get_info()
-
-        if not self.observation_space.contains(observation):
-            print("INVALID OBSERVATION!")
-            print("obs:", observation)
-            print("obs type:", type(observation))
-            print("obs dtype:", getattr(observation, "dtype", None))
-            print("obs shape:", getattr(observation, "shape", None))
-            print("space:", self.observation_space)
-            raise ValueError("Observation not in observation_space")
+        info = self.__get_info(terminal=terminated, features=features)
 
         return observation, reward, terminated, truncated, info       

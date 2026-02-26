@@ -4,10 +4,12 @@ from sbx import SAC
 import matplotlib.pyplot as plt
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.common.monitor import Monitor
-from irl.dataset.expert_dataset_continuous import ExpertDatasetContinuous
-from irl.utils.tools import AdamOptimizer, compute_dtw
+from irl.dataset.expert_dataset import ExpertDataset
+from irl.utils.tools import compute_dtw
+from irl.utils.variable_dt_buffer import VariableDtReplayBuffer
 from tqdm import tqdm
 import math
+import jax.numpy as jnp
 
 
 class MaxEntConfig:
@@ -17,6 +19,7 @@ class MaxEntConfig:
     device: str = 'cuda'
     n_epochs: int = 10
     reward_lr: float = 0.01
+    reward_lr_end: float = 0.0     # Final reward LR for linear decay (0 = decay to zero)
     rollout_samples: int = 20
     policy_train_steps_per_iter: int = 5_000
     policy_train_lr: float = 3e-4
@@ -26,6 +29,7 @@ class MaxEntConfig:
     segment: str = None
     folder_name: str = "MaxEntIRL_continuous"
     validation: bool = False
+    grad_clip_norm: float = 5.0  # Max gradient norm for clipping (None to disable)
 
 class MaxEntIRLTrainer_Continuous:
     """
@@ -34,7 +38,7 @@ class MaxEntIRLTrainer_Continuous:
 
     def __init__(self, 
                  initial_reward_weights: np.ndarray,
-                 expert_trajectories: ExpertDatasetContinuous,
+                 expert_trajectories: ExpertDataset,
                  env_name: str,
                  cfg: MaxEntConfig, 
                  ):
@@ -52,9 +56,6 @@ class MaxEntIRLTrainer_Continuous:
         self.val_dtw_distance = []
         self.reward_weights_history = []
 
-        # Register optimiser
-        #self.optimizer = AdamOptimizer(params_shape=self.reward_weights.shape, lr=self.cfg.reward_lr)
-
         print(f"MaxEnt IRL Trainer initialized with {len(self.train_set)} training samples and {len(self.val_set)} validation samples.")
 
 
@@ -69,7 +70,7 @@ class MaxEntIRLTrainer_Continuous:
         vec_env = DummyVecEnv([lambda: env])
 
         # Normalise rewards for training
-        vec_env = VecNormalize(vec_env, norm_obs=False, norm_reward=True, clip_obs=10.0, clip_reward=10.0)
+        #vec_env = VecNormalize(vec_env, norm_obs=False, norm_reward=True, clip_obs=10.0, clip_reward=10.0)
 
         # create rollout env 
         rollout_env = gym.make(self.env_name)
@@ -86,11 +87,17 @@ class MaxEntIRLTrainer_Continuous:
             device=self.cfg.device,
             batch_size=self.cfg.policy_batch_size,
             tensorboard_log=f"./models/{self.cfg.folder_name}/tensorboard/",
+
+            # --- Custom Buffer ---
+            replay_buffer_class=VariableDtReplayBuffer,       
+            replay_buffer_kwargs={
+                'base_gamma': self.cfg.policy_gamma         
+            },
             
             # --- SAC Specific Parameters ---
             buffer_size=100_000,  # Size of the replay buffer
             learning_starts=1_000,    # Steps to collect random data before learning starts
-            ent_coef=0.1,           # Manually set the entropy coefficient 
+            ent_coef='auto',         # Learned entropy coefficient, reset each epoch
             train_freq=1,           # Update the model every n step
             gradient_steps=1,       # How many gradient updates to do per n step
         )
@@ -113,12 +120,18 @@ class MaxEntIRLTrainer_Continuous:
 
             # --- TRAINING ----
 
-            # Train PPO policy with current reward weights
-            
+            # Train SAC policy with current reward weights
             vec_env.envs[0].unwrapped.set_reward_weights(self.reward_weights)
             vec_env.envs[0].unwrapped.set_initial_states(None)
 
-            model.learn(total_timesteps=self.cfg.policy_train_steps_per_iter,tb_log_name=f"epoch_{epoch+1}", progress_bar=True)
+            # Reset learned entropy coefficient so auto-tuning restarts fresh each epoch
+            # Initial ent_coef = 0.1  =>  log(0.1) ≈ -2.3026
+            if hasattr(model, 'ent_coef_state'):
+                model.ent_coef_state = model.ent_coef_state.replace(
+                    params={'log_ent_coef': jnp.array(-2.3026)}
+                )
+
+            model.learn(total_timesteps=self.cfg.policy_train_steps_per_iter, tb_log_name=f"epoch_{epoch+1}", progress_bar=True, reset_num_timesteps=False, log_interval=500)
 
             # Loop through each expert trajectory 
             grad = np.zeros_like(self.reward_weights)
@@ -183,7 +196,23 @@ class MaxEntIRLTrainer_Continuous:
                 average_l2_loss += l2_loss / N  
             
             # Update reward weights
-            self.reward_weights += self.cfg.reward_lr * grad
+
+            # Gradient clipping
+            grad_norm = np.linalg.norm(grad)
+            if self.cfg.grad_clip_norm is not None and grad_norm > self.cfg.grad_clip_norm:
+                grad = grad * (self.cfg.grad_clip_norm / grad_norm)
+
+            print(f"Gradient before update: {grad} (norm: {grad_norm:.4f}, clipped: {grad_norm > (self.cfg.grad_clip_norm or np.inf)})")
+
+            # Linear LR decay: lr(t) = lr_start + (lr_end - lr_start) * (epoch / (n_epochs - 1))
+            if self.cfg.n_epochs > 1:
+                current_lr = self.cfg.reward_lr + (self.cfg.reward_lr_end - self.cfg.reward_lr) * (epoch / (self.cfg.n_epochs - 1))
+            else:
+                current_lr = self.cfg.reward_lr
+
+            # Perform gradient ascent
+            self.reward_weights = self.reward_weights + current_lr * grad
+            print(f"Reward LR: {current_lr:.6f}")
 
             # --- VALIDATION ----
 
@@ -250,6 +279,15 @@ class MaxEntIRLTrainer_Continuous:
             # Save model checkpoint
             model.save(f"./models/{self.cfg.folder_name}/maxent_irl_epoch{epoch+1}")
         
+        self.__plot_results()
+
+        print("Training completed")
+
+
+
+    def __plot_results(self):
+        """Plot training results and reward weights evolution"""
+
         # --- PLOTTING ---
         plt.figure(1)
         plt.plot(range(1, self.cfg.n_epochs + 1), self.train_l2_loss)
@@ -314,12 +352,3 @@ class MaxEntIRLTrainer_Continuous:
         np.savetxt(f'./models/{self.cfg.folder_name}/final_reward_weights.txt', self.reward_weights, fmt='%.6f')
 
         plt.show()
-
-        print("Training completed")
-
-
-
-
-
-
-    

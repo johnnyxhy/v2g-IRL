@@ -1,6 +1,6 @@
 import numpy as np
 import gymnasium as gym
-from sbx import SAC, PPO
+from sbx import SAC
 import matplotlib.pyplot as plt
 from stable_baselines3.common.vec_env import DummyVecEnv
 from irl.utils.tools import compute_dtw
@@ -35,11 +35,11 @@ if __name__ == "__main__":
     accumulated_reward = [0.0]
 
     # Extract initial states from expert json
-    with open("data/processed_trajectories_continuous.json", "r") as f:
+    with open("data/processed_trajectories_profit_simple.json", "r") as f:
         expert_data = json.load(f)
 
     # Load the trained model
-    model = SAC.load("./models/MaxEntIRL_continuous_v4_exp3/maxent_irl_epoch100")
+    model = SAC.load("./models/MaxEntIRL_continuous_v7_exp5(No norm)/maxent_irl_epoch5")
     
     vec_env = DummyVecEnv([lambda: gym.make('V2GEnv-continuous')])
 
@@ -77,11 +77,15 @@ if __name__ == "__main__":
         # Extract the first trajectory's initial state
         initial_states = expert_data[expert_index]['initial_values']
         vec_env.envs[0].unwrapped.set_initial_states(initial_states)
-        vec_env.envs[0].unwrapped.set_reward_weights(np.array([2, 2, -0.5, -0.5, -10, 1], dtype=np.float32))
+        vec_env.envs[0].unwrapped.set_reward_weights(np.array([3.442509, 2.777384, -10.059095, -14.462010, -9.689913], dtype=np.float32))
 
         obs = vec_env.reset()
         extract_trajectory(obs, trajectories)
-        print(obs)
+        # Print battery capacity
+        print(f"Battery capacity for trajectory {expert_index}: {obs['battery_capacity'][0]}")
+        
+        # Print expert feature expectation
+        print(f"Expert feature expectation for trajectory {expert_index}: {expert_data[expert_index]['feature_expectation']}")
         
         while True:
             action, _states = model.predict(obs, deterministic=True)
@@ -91,7 +95,7 @@ if __name__ == "__main__":
             # Print every action taken
             print(f"Action taken at timestep {obs['timestep'][0]}: {action[0]} with reward: {rewards[0]} with soc: {obs['soc'][0]} and soc target: {obs['soc_target'][0]}")
             # print feature expectation from info
-            print(f"Features at timestep {obs['timestep'][0]}: {info[0]['features']}")
+            #print(f"Features at timestep {obs['timestep'][0]}: {info[0]['features']}")
 
             trajectories['reward'] = np.append(trajectories['reward'], rewards[0])
             accumulated_reward.append(accumulated_reward[-1] + rewards[0])
@@ -122,19 +126,20 @@ if __name__ == "__main__":
         plot_expert_trajectory(soc_history, expert_index, out_start_timestep, return_start_timestep, out_duration, return_duration, dtw_distance)
 
         # Plot accumulated reward over time
-        plt.figure()
-        plt.plot(range(len(accumulated_reward)), accumulated_reward, label='Accumulated Reward')
-        plt.xlabel('Timestep')
-        plt.ylabel('Accumulated Reward')
-        plt.title('Accumulated Reward over Time for Trajectory {}'.format(expert_index))
-        plt.legend()
-        plt.show()
+        # plt.figure()
+        # plt.plot(range(len(accumulated_reward)), accumulated_reward, label='Accumulated Reward')
+        # plt.xlabel('Timestep')
+        # plt.ylabel('Accumulated Reward')
+        # plt.title('Accumulated Reward over Time for Trajectory {}'.format(expert_index))
+        # plt.legend()
+        # plt.show()
 
 
 # Evaluate on first 5 trajectories of the specified segment
     segment = "Male 50-59"
     expert_indexes = find_expert_indexes(segment)
-    for idx in expert_indexes[:5]:
+
+    for idx in expert_indexes[:10]:
         print(f"Evaluating trajectory {idx} from segment {segment}")
         evaluate(idx)
 
