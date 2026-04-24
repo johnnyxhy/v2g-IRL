@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import gymnasium as gym
 from irl.dataset.expert_dataset import ExpertDataset
@@ -29,5 +30,8 @@ trainer = MaxEntIRLTrainer_Simple(
     cfg=cfg,
 )
 
+_t0 = time.time()
 trainer.train()
+_elapsed = time.time() - _t0
+print(f"Total training time: {int(_elapsed // 3600)}h {int(_elapsed % 3600 // 60)}m {_elapsed % 60:.1f}s")
 

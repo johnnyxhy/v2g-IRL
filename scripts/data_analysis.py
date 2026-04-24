@@ -40,7 +40,7 @@ trip_journey_time = extract_values(df, 'Trip_Journey_Time_Timesteps', 0)
 return_journey_time = extract_values(df, 'Return_Journey_Time_Timesteps', 0)
 journey_time = np.concatenate([trip_journey_time, return_journey_time])
 
-journey_distance = extract_values(df, 'Upcoming_Journey_Distance_Miles', 0)
+journey_distance = extract_values(df, 'Upcoming_Trip_Distance_Miles', 0)
 out_speed = extract_values(df, 'Average_Speed_Out_mph', 0)
 return_speed = extract_values(df, 'Average_Speed_Return_mph', 0)
 journey_speed = np.concatenate([out_speed, return_speed])
@@ -135,11 +135,11 @@ def plot_exponential_fit(data, bins=30, name='Data'):
 
 # --- EXAMPLE USAGE ---
 plot_distribution_fit(soc_initial, 'norm', bins=50, name='Initial SoC')
-plot_distribution_fit(energy_per_journey_minute, 'gamma', bins=50, name='Energy per Journey Minute')
-plot_distribution_fit(out_start_timestep, 'gamma', bins=30, name='Out Start Timestep')
-plot_distribution_fit(return_start_timestep, 'gamma', bins=30, name='Return Start Timestep', floc=20)
-plot_distribution_fit(journey_time, 'gamma', bins=30, name='Journey Time', floc=0)
-plot_distribution_fit(journey_speed, 'gamma', bins=30, name='Journey Speed')
+# plot_distribution_fit(energy_per_journey_minute, 'gamma', bins=50, name='Energy per Journey Minute')
+plot_distribution_fit(out_start_timestep, 'gamma', bins=20, name='Out Start Timestep')
+plot_distribution_fit(return_start_timestep, 'gamma', bins=20, name='Return Start Timestep', floc=20)
+# plot_distribution_fit(journey_time, 'gamma', bins=30, name='Journey Time', floc=0)
+plot_distribution_fit(journey_speed, 'gamma', bins=40, name='Journey Speed')
 plot_exponential_fit(journey_distance, bins=50, name='Journey Distance')
 
 

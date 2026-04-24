@@ -7,141 +7,235 @@ from irl.utils.tools import compute_dtw
 import json
 
 gym.register(
-    id='V2GEnv-continuous',
-    entry_point="irl.envs.V2GEnv_continuous:V2GEnv",
+    id='V2GEnv-profit',
+    entry_point="irl.envs.V2GEnv_profit:V2GEnv",
     max_episode_steps=96,
 )
 
-def extract_trajectory(obs, trajectory):
-    trajectory['timestep'] = np.append(trajectory['timestep'], obs['timestep'])
-    trajectory['soc'] = np.append(trajectory['soc'], obs['soc'][0])
-    trajectory['soc_target'] = np.append(trajectory['soc_target'], obs['soc_target'][0])
-    #trajectory['energy_price'] = np.append(trajectory['energy_price'], obs['energy_price'][0])
-    trajectory['time_to_next_journey'] = np.append(trajectory['time_to_next_journey'], obs['time_to_next_journey'])
+energy_price_profile = np.array([
+    0.07, 0.07, 0.07, 0.07, 0.08, 0.08, 0.09, 0.09, 0.10, 0.10, 0.11, 0.12,
+    0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.21, 0.22, 0.23, 0.24, 0.26,
+    0.27, 0.28, 0.30, 0.31, 0.32, 0.33, 0.35, 0.36, 0.37, 0.38, 0.39, 0.40,
+    0.41, 0.42, 0.43, 0.44, 0.44, 0.45, 0.45, 0.46, 0.46, 0.47, 0.47, 0.47,
+    0.47, 0.47, 0.47, 0.47, 0.46, 0.46, 0.45, 0.45, 0.44, 0.44, 0.43, 0.42,
+    0.41, 0.40, 0.39, 0.38, 0.37, 0.36, 0.35, 0.33, 0.32, 0.31, 0.30, 0.28,
+    0.27, 0.26, 0.24, 0.23, 0.22, 0.21, 0.19, 0.18, 0.17, 0.16, 0.15, 0.14,
+    0.13, 0.12, 0.11, 0.10, 0.10, 0.09, 0.09, 0.08, 0.08, 0.07, 0.07, 0.07
+])
 
-if __name__ == "__main__":
 
-    # Initialize trajectory storage
+def find_expert_indexes(expert_data, segment):
+    return [i for i, traj in enumerate(expert_data) if traj['segment'] == segment]
 
-    trajectories = {
-        'timestep': np.array([], dtype=int),
-        'soc': np.array([], dtype=np.float32),
-        'soc_target': np.array([], dtype=np.float32),
-        #'energy_price': np.array([], dtype=np.float32),
-        'time_to_next_journey': np.array([], dtype=int),
-        'reward': np.array([0], dtype=np.float32),
-    }
 
-    accumulated_reward = [0.0]
+def _resample_trajectory(values, target_len):
+    """Resample a 1D trajectory to target_len using linear interpolation."""
+    values = np.asarray(values, dtype=np.float32)
+    if len(values) == target_len:
+        return values
+    if len(values) <= 1:
+        return np.full(target_len, values[0] if len(values) == 1 else 0.0, dtype=np.float32)
+    src_x = np.linspace(0.0, 1.0, num=len(values), dtype=np.float32)
+    dst_x = np.linspace(0.0, 1.0, num=target_len, dtype=np.float32)
+    return np.interp(dst_x, src_x, values).astype(np.float32)
 
-    # Extract initial states from expert json
-    with open("data/processed_trajectories_profit.json", "r") as f:
-        expert_data = json.load(f)
 
-    # Load the trained model
-    model = SAC.load("./models/MaxEntIRL_continuous_v7_exp5(No norm)/maxent_irl_epoch5")
+def plot_expert_trajectory(soc_history, expert_soc, expert_index,
+                           out_start_timestep, return_start_timestep,
+                           out_duration, return_duration, dtw_distance,
+                           min_soc=None, max_soc=None,
+                           dtw_mean=None, dtw_std=None, interval_score=None):
+    plt.figure()
+    plt.plot(range(len(soc_history)), soc_history, label='Agent SoC')
+    if min_soc is not None and max_soc is not None:
+        plt.fill_between(
+            range(len(min_soc)),
+            min_soc,
+            max_soc,
+            color='tab:blue',
+            alpha=0.2,
+            label='Agent SoC Range'
+        )
+    plt.plot(range(len(expert_soc)), expert_soc, label='Expert SoC', linestyle='--')
+    plt.axvspan(out_start_timestep, out_start_timestep + out_duration,
+                color='red', alpha=0.3, label='Out Journey')
+    plt.axvspan(return_start_timestep, return_start_timestep + return_duration,
+                color='blue', alpha=0.3, label='Return Journey')
+
+    energy_price = energy_price_profile[:len(soc_history)]
+    plt.plot(range(len(energy_price)), energy_price, label='Energy Price', color='green')
+
+    plt.xlabel('Timestep')
+    plt.ylabel('State of Charge (SoC)')
+    plt.legend()
+    if dtw_mean is not None and dtw_std is not None:
+        title = f'Linear MaxEnt IRL \u2014 Best DTW: {dtw_distance:.2f} (mean\u00b1std: {dtw_mean:.2f}\u00b1{dtw_std:.2f})'
+        if interval_score is not None:
+            title += f' \u2014 IS: {interval_score:.3f}'
+        title += f' \u2014 Trajectory {expert_index}'
+        plt.title(title)
+    else:
+        plt.title(f'Linear MaxEnt IRL \u2014 DTW: {dtw_distance:.2f} \u2014 Trajectory {expert_index}')
+    plt.show()
+
+
+def evaluate(vec_env, model, expert_data, expert_index, n_rollouts=10, deterministic=False, noise_scale=1.0, plot=True):
+    """Run n evaluation episodes and plot the single rollout with the lowest DTW.
     
-    vec_env = DummyVecEnv([lambda: gym.make('V2GEnv-continuous')])
+    noise_scale: float in [0, 1]. Controls stochasticity when deterministic=False.
+        1.0 = full stochastic, 0.0 = deterministic, values in between blend.
+    """
+    initial_states = expert_data[expert_index]['initial_values']
+    vec_env.envs[0].unwrapped.set_initial_states(initial_states)
 
-    # Find expert indexes corresponding to segment
-    def find_expert_indexes(segment):
-        indexes = []
-        for i, traj in enumerate(expert_data):
-            if traj['segment'] == segment:
-                indexes.append(i)
-        return indexes
+    all_dtw = []
+    all_rewards = []
+    all_feat_exp = []
+    all_soc_histories = []
 
-    # Plotting function to evaluate a specific expert trajectory
-    def plot_expert_trajectory(soc_history, expert_index, out_start_timestep, return_start_timestep, out_duration, return_duration, dtw_distance):
-        # Plot SOC over timesteps
-        plt.figure()
-        plt.plot(range(len(soc_history)), soc_history, label='SoC')
+    best_dtw = float('inf')
+    best_soc_history = None
+    best_out_start = None
+    best_return_start = None
+    best_out_dur = None
+    best_return_dur = None
+    best_feat_exp = None
 
-        # Plot expert SoC
-        expert_soc = expert_data[expert_index]['soc_history']
-        plt.plot(range(len(expert_soc)), expert_soc, label='Expert SoC', linestyle='--')
+    expert_soc = expert_data[expert_index]['soc_history']
+    target_len = len(expert_soc)
 
-        # Mark with colored regions the out and return journeys
-        plt.axvspan(out_start_timestep, out_start_timestep + out_duration, color='red', alpha=0.3, label='Out Journey')
-        plt.axvspan(return_start_timestep, return_start_timestep + return_duration, color='blue', alpha=0.3, label='Return Journey')
-
-        plt.xlabel('Timestep')
-        plt.ylabel('State of Charge (SoC)')
-        plt.legend()
-
-        plt.title('V2G Environment Evaluation with DTW Distance: {:.2f} for Trajectory {}'.format(dtw_distance, expert_index))
-        plt.show()
-
-    def evaluate(expert_index):
-
-        # Extract the first trajectory's initial state
-        initial_states = expert_data[expert_index]['initial_values']
-        vec_env.envs[0].unwrapped.set_initial_states(initial_states)
-        vec_env.envs[0].unwrapped.set_reward_weights(np.array([3.442509, 2.777384, -10.059095, -14.462010, -9.689913], dtype=np.float32))
-
+    for _ in range(n_rollouts):
         obs = vec_env.reset()
-        extract_trajectory(obs, trajectories)
-        # Print battery capacity
-        print(f"Battery capacity for trajectory {expert_index}: {obs['battery_capacity'][0]}")
-        
-        # Print expert feature expectation
-        print(f"Expert feature expectation for trajectory {expert_index}: {expert_data[expert_index]['feature_expectation']}")
-        
+        accumulated_reward = 0.0
+
         while True:
-            action, _states = model.predict(obs, deterministic=True)
-
+            if deterministic or noise_scale >= 1.0:
+                action, _ = model.predict(obs, deterministic=deterministic)
+            else:
+                det_action, _ = model.predict(obs, deterministic=True)
+                stoch_action, _ = model.predict(obs, deterministic=False)
+                action = det_action + noise_scale * (stoch_action - det_action)
             obs, rewards, done, info = vec_env.step(action)
-
-            # Print every action taken
-            print(f"Action taken at timestep {obs['timestep'][0]}: {action[0]} with reward: {rewards[0]} with soc: {obs['soc'][0]} and soc target: {obs['soc_target'][0]}")
-            # print feature expectation from info
-            #print(f"Features at timestep {obs['timestep'][0]}: {info[0]['features']}")
-
-            trajectories['reward'] = np.append(trajectories['reward'], rewards[0])
-            accumulated_reward.append(accumulated_reward[-1] + rewards[0])
+            accumulated_reward += rewards[0]
 
             if done[0]:
-                terminal_obs = info[0]["terminal_observation"]
                 soc_history = info[0]["soc_history"]
-                out_start_timestep = info[0]["out_start_timestep"]
-                return_start_timestep = info[0]["return_start_timestep"]
-                out_duration = info[0]["out_duration"]
-                return_duration = info[0]["return_duration"]
-                feature_expectation = info[0]["feature_expectation"]
-                print("Length of soc history:", len(soc_history))
-                print("Feature expectation:", feature_expectation)
-                print("Accumulated reward:", accumulated_reward[-1])
-
-                extract_trajectory(terminal_obs, trajectories)
+                feat_exp = np.array(info[0]["feature_expectation"], dtype=np.float32)
                 break
-            else:
-                extract_trajectory(obs, trajectories)
 
-        # Compute DTW distance between expert and agent SoC trajectories
+        all_rewards.append(accumulated_reward)
+        all_feat_exp.append(feat_exp)
+        all_soc_histories.append(_resample_trajectory(soc_history, target_len))
+
         dtw_distance = compute_dtw(
-            np.array(expert_data[expert_index]['soc_history'], dtype=np.float32),
-            np.array(soc_history, dtype=np.float32)
+            np.array(expert_soc, dtype=np.float32),
+            np.array(soc_history, dtype=np.float32),
+        )
+        all_dtw.append(dtw_distance)
+
+        if dtw_distance < best_dtw:
+            best_dtw = dtw_distance
+            best_soc_history = soc_history
+            best_out_start = info[0]["out_start_timestep"]
+            best_return_start = info[0]["return_start_timestep"]
+            best_out_dur = info[0]["out_duration"]
+            best_return_dur = info[0]["return_duration"]
+            best_feat_exp = feat_exp
+
+    dtw_mean = float(np.mean(all_dtw))
+    dtw_std = float(np.std(all_dtw))
+    reward_mean = float(np.mean(all_rewards))
+    reward_std = float(np.std(all_rewards))
+    feat_mean = np.mean(np.stack(all_feat_exp, axis=0), axis=0)
+    soc_stack = np.stack(all_soc_histories, axis=0)
+    min_soc = np.min(soc_stack, axis=0)
+    max_soc = np.max(soc_stack, axis=0)
+
+    # Interval Score: penalizes both width and misses (lower is better)
+    expert_soc_arr = np.array(expert_soc, dtype=np.float32)
+    expert_resampled = _resample_trajectory(expert_soc_arr, target_len)
+    width = max_soc - min_soc
+    undershoot = np.maximum(min_soc - expert_resampled, 0.0)
+    overshoot = np.maximum(expert_resampled - max_soc, 0.0)
+    interval_score = float(np.mean(width + 2.0 * undershoot + 2.0 * overshoot))
+
+    print(
+        f"Traj {expert_index} over {n_rollouts} rollouts: "
+        f"DTW={dtw_mean:.3f}\u00b1{dtw_std:.3f}, "
+        f"BestDTW={best_dtw:.3f}, "
+        f"IS={interval_score:.3f}, "
+        f"AccReward={reward_mean:.3f}\u00b1{reward_std:.3f}, "
+        f"FeatExpMean={feat_mean}, FeatExpBest={best_feat_exp}"
+    )
+
+    if plot:
+        plot_expert_trajectory(
+            best_soc_history,
+            expert_soc,
+            expert_index,
+            best_out_start,
+            best_return_start,
+            best_out_dur,
+            best_return_dur,
+            best_dtw,
+            min_soc=min_soc,
+            max_soc=max_soc,
+            dtw_mean=dtw_mean,
+            dtw_std=dtw_std,
+            interval_score=interval_score,
         )
 
-        plot_expert_trajectory(soc_history, expert_index, out_start_timestep, return_start_timestep, out_duration, return_duration, dtw_distance)
-
-        # Plot accumulated reward over time
-        # plt.figure()
-        # plt.plot(range(len(accumulated_reward)), accumulated_reward, label='Accumulated Reward')
-        # plt.xlabel('Timestep')
-        # plt.ylabel('Accumulated Reward')
-        # plt.title('Accumulated Reward over Time for Trajectory {}'.format(expert_index))
-        # plt.legend()
-        # plt.show()
+    return best_dtw, interval_score
 
 
-# Evaluate on first 5 trajectories of the specified segment
+if __name__ == "__main__":
+    # --- Configuration ---
+    model_path = "./models/MaxEntIRL_profit_v7_exp2/maxent_irl_epoch50"
+    expert_data_path = "data/processed_trajectories_profit.json"
     segment = "Male 50-59"
-    expert_indexes = find_expert_indexes(segment)
+    n_rollouts = 20
+    n_figures = 5              # number of example figures to display
+    eval_ratio = 1.0           # fraction of segment trajectories to evaluate (1.0 = all)
+    deterministic_policy = False
+    noise_scale = 0.5           # 0.0 = deterministic, 1.0 = full stochastic
 
-    for idx in expert_indexes[:10]:
-        print(f"Evaluating trajectory {idx} from segment {segment}")
-        evaluate(idx)
+    # Load expert data
+    with open(expert_data_path, "r") as f:
+        expert_data = json.load(f)
+
+    # Load trained model
+    model = SAC.load(model_path)
+
+    vec_env = DummyVecEnv([lambda: gym.make('V2GEnv-profit')])
+
+    expert_indexes = find_expert_indexes(expert_data, segment)
+    n_eval = max(1, int(len(expert_indexes) * eval_ratio))
+    expert_indexes = expert_indexes[:n_eval]
+    print(f"Found {len(expert_indexes)} trajectories for segment '{segment}' (evaluating {n_eval})")
+
+    all_best_dtw = []
+    all_is = []
+
+    for i, idx in enumerate(expert_indexes):
+        print(f"\nEvaluating trajectory {idx} ({i+1}/{len(expert_indexes)})...")
+        best_dtw, interval_score = evaluate(
+            vec_env,
+            model,
+            expert_data,
+            idx,
+            n_rollouts=n_rollouts,
+            deterministic=deterministic_policy,
+            noise_scale=noise_scale,
+            plot=(i < n_figures),
+        )
+        all_best_dtw.append(best_dtw)
+        all_is.append(interval_score)
+
+    print(f"\n{'='*60}")
+    print(f"Summary over {len(all_best_dtw)} trajectories:")
+    print(f"  Avg Best DTW: {np.mean(all_best_dtw):.3f} \u00b1 {np.std(all_best_dtw):.3f}")
+    print(f"  Avg IS:       {np.mean(all_is):.3f} \u00b1 {np.std(all_is):.3f}")
+    print(f"{'='*60}")
 
         
 

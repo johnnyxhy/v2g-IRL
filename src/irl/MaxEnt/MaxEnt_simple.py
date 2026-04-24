@@ -47,6 +47,7 @@ class MaxEntIRLTrainer_Simple:
         # For tracking
         self.train_l2_loss = []
         self.train_dtw_distance = []
+        self.train_log_likelihood = []
         self.val_l2_loss = []
         self.val_dtw_distance = []
 
@@ -113,6 +114,7 @@ class MaxEntIRLTrainer_Simple:
             grad = np.zeros_like(self.reward_weights)
             average_l2_loss = 0.0
             N = len(self.train_set)
+            avg_log_likelihood = 0.0
 
             for traj in tqdm(self.train_set, desc="Processing Expert Trajectories"):
                 # Compute feature expectations from expert trajectory
@@ -158,6 +160,14 @@ class MaxEntIRLTrainer_Simple:
                 weights = exp_weights / np.sum(exp_weights)
 
                 traj_feat_exp = np.dot(weights, traj_feat_exp_arr)
+
+                # Log-likelihood: R(τ_expert) - log Z, where Z is estimated from rollouts only.
+                # Can be positive when expert reward exceeds all rollout rewards.
+                r_expert_step = float(np.dot(self.reward_weights, expert_feat_exp))
+                r_rollouts_step = np.array([float(np.dot(self.reward_weights, traj_feat_exp_arr[i]))
+                                            for i in range(self.cfg.rollout_samples)])
+                log_Z = np.max(r_rollouts_step) + np.log(np.sum(np.exp(r_rollouts_step - np.max(r_rollouts_step))))
+                avg_log_likelihood += (r_expert_step - log_Z) / N
                 
                 # Update gradient
                 grad += (expert_feat_exp - traj_feat_exp)
@@ -220,12 +230,13 @@ class MaxEntIRLTrainer_Simple:
             # Log average L2 loss
             self.train_l2_loss.append(average_l2_loss)
             self.train_dtw_distance.append(avg_dtw_distance)
+            self.train_log_likelihood.append(avg_log_likelihood)
             if self.cfg.validation and len(self.val_set) > 0:
                 self.val_l2_loss.append(val_loss)
                 self.val_dtw_distance.append(val_dtw_distance)
 
             print(f"--- Epoch {epoch+1}/{self.cfg.n_epochs} Summary ---")
-            print(f"Avg L2 Loss: {average_l2_loss:.4f}, Avg DTW Distance: {avg_dtw_distance:.4f}")
+            print(f"Avg L2 Loss: {average_l2_loss:.4f}, Avg DTW Distance: {avg_dtw_distance:.4f}, Log-Likelihood: {avg_log_likelihood:.4f}")
             print(f"Avg Expert Feature Expectation: {avg_expert_feat_exp}, Avg Traj Feature Expectation: {avg_traj_feat_exp}")
             print(f"Updated Reward Weights: {self.reward_weights}")
             print(f"Avg Episode Length: {avg_episode_length:.2f}")
@@ -258,7 +269,17 @@ class MaxEntIRLTrainer_Simple:
         plt.ylabel('Average DTW Distance')
         plt.grid()
         plt.savefig(f'./models/{self.cfg.folder_name}/maxent_irl_simple_training_dtw_distance.png')
-        
+
+        plt.figure(3)
+        plt.plot(range(1, self.cfg.n_epochs + 1), self.train_log_likelihood, marker='o')
+        plt.axhline(0, color='red', linestyle='--', linewidth=0.8, label='Converged (LL=0)')
+        plt.title('MaxEnt IRL — Expert Log-Likelihood')
+        plt.xlabel('Epoch')
+        plt.ylabel('Avg log p(τ_expert)')
+        plt.grid()
+        plt.legend()
+        plt.savefig(f'./models/{self.cfg.folder_name}/maxent_irl_simple_log_likelihood.png')
+
         plt.show()
 
         print("Training completed")

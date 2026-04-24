@@ -89,7 +89,7 @@ def load_trajectories(input_file, output_file=None):
     work_charge_map = {7.4: 0, 11: 1, 22: 2}
     df['work_charge_index'] = df['Work_Charger_kW'].map(work_charge_map)
     
-    # --- 10. Battery needed and exceeded target ---
+    # --- 10. Battery needed and exceeded target (per-timestep, will be multiplied by action Δt later) ---
     df['battery_needed_target'] = (np.maximum(0.0, df['SoC_target'] - df['SoC_end'])) ** 2
     df['battery_exceeded_target'] = (np.maximum(0.0, df['SoC_end'] - df['SoC_target'])) ** 2
 
@@ -105,9 +105,9 @@ def load_trajectories(input_file, output_file=None):
     )
     df['journey_failure'] = df['journey_failure'].fillna(0.0)
 
-    # --- Charge cost and discharge revenue ---
-    df['charge_cost_step'] = np.where(df['Total_Charge_kWh'] > 0, df['Amount_Charged_During_Timestep_kWh'] * df['Energy_Price_Pounds'], 0.0)
-    df['discharge_revenue_step'] = np.where(df['Total_Discharge_kWh'] > 0, -df['Amount_Charged_During_Timestep_kWh'] * df['Energy_Price_Pounds'], 0.0)
+    # --- Indicator-based price features ---
+    # Per-timestep price is stored for computing per-action average price later
+    mean_price = df['Energy_Price_Pounds'].mean()  # ≈ 0.27
 
 
     # --- EXTRACT EPISODES ---
@@ -146,14 +146,30 @@ def load_trajectories(input_file, output_file=None):
             'work_charge_power': episode_data['work_charge_index'].iloc[0].item(),
         }
 
-        # --- Sum charge_cost_step and discharge_revenue_step per action ---
+        # --- Compute per-action timing quality (quadratic in total action amount) ---
         # An action spans from one action start to the next, where an action start is
         # the first row or a row where the previous row's Action_Duration_Timesteps == 0
         action_starts = (episode_data.index == 0) | (episode_data['Action_Duration_Timesteps'].shift(1) == 0)
         episode_data['action_group'] = action_starts.cumsum()
-        action_sums = episode_data.groupby('action_group')[['charge_cost_step', 'discharge_revenue_step']].transform('sum')
-        episode_data['charge_cost'] = action_sums['charge_cost_step']
-        episode_data['discharge_revenue'] = action_sums['discharge_revenue_step']
+
+        # Compute mean price per action (weighted by timesteps with energy transfer)
+        episode_data['has_transfer'] = (episode_data['Amount_Charged_During_Timestep_kWh'].abs() > 0).astype(float)
+        episode_data['price_x_transfer'] = episode_data['Energy_Price_Pounds'] * episode_data['has_transfer']
+        grp = episode_data.groupby('action_group')
+        action_mean_price = grp['price_x_transfer'].transform('sum') / grp['has_transfer'].transform('sum').replace(0, np.nan)
+        action_mean_price = action_mean_price.fillna(mean_price)
+
+        # Price cost penalties: penalize BAD timing (always ≥ 0, no cancellation)
+        # charge_cost_penalty = 10 × amount² × (price / max) — quadratic penalty scaled by how expensive
+        # discharge_cost_penalty = 10 × amount² × (max - price) / max — quadratic penalty scaled by how cheap
+        max_price = df['Energy_Price_Pounds'].max()  # ≈ 0.47
+        episode_data['charge_cost_penalty'] = 10.0 * episode_data['amount_charged'] ** 2 * (action_mean_price / max_price)
+        episode_data['discharge_cost_penalty'] = 10.0 * episode_data['amount_discharged'] ** 2 * ((max_price - action_mean_price) / max_price)
+
+        # Multiply target features by action duration (Δt) so long actions pay more penalty
+        action_dt = grp['Timestep'].transform('count')
+        episode_data['battery_needed_target'] = episode_data['battery_needed_target'] * action_dt
+        episode_data['battery_exceeded_target'] = episode_data['battery_exceeded_target'] * action_dt
 
         # --- Extract only for first entry and when Action_Duration_Timesteps is zero for the row above --- 
         episode_data = episode_data[(episode_data.index == 0) | (episode_data['Action_Duration_Timesteps'].shift(1) == 0)].reset_index(drop=True)
@@ -164,15 +180,15 @@ def load_trajectories(input_file, output_file=None):
         features = episode_data[[
             'amount_charged',
             'amount_discharged',
+            'charge_cost_penalty',
+            'discharge_cost_penalty',
             'battery_needed_target',
             'battery_exceeded_target',
             'journey_failure',
-            'charge_cost',
-            'discharge_revenue'
         ]].values.astype(np.float64)
 
         # Calculate feature expectations 
-        feature_expectation = np.mean(features, axis=0)
+        feature_expectation = np.sum(features, axis=0)
 
         # --- EXTRACT OBSERVATIONS ---
 

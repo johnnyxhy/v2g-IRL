@@ -90,8 +90,8 @@ def load_trajectories(input_file, output_file=None):
     df['work_charge_index'] = df['Work_Charger_kW'].map(work_charge_map)
     
     # --- 10. Battery needed and exceeded target ---
-    df['battery_needed_target'] = (np.maximum(0.0, df['SoC_target'] - df['SoC_end'])) ** 2
-    df['battery_exceeded_target'] = (np.maximum(0.0, df['SoC_end'] - df['SoC_target'])) ** 2
+    df['battery_needed_target'] = (np.maximum(0.0, df['SoC_target'] - df['SoC_end'])) ** 2 * (df['Action_Duration_Timesteps']+1)
+    df['battery_exceeded_target'] = (np.maximum(0.0, df['SoC_end'] - df['SoC_target'])) ** 2 * (df['Action_Duration_Timesteps']+1)
 
     # --- 12. Journey failure ---
     # Decided if in row above, location is driving_out or driving_return and SoC_end == 0

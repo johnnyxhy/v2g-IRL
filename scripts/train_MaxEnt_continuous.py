@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import gymnasium as gym
 from irl.dataset.expert_dataset import ExpertDataset
@@ -21,9 +22,9 @@ if __name__ == "__main__":
     cfg.reward_lr_end = 0.01 # Decay reward LR from 1 to 0.01 over training — allows larger initial
     cfg.n_epochs = 5
     cfg.rollout_samples = 20
-    cfg.segment = "Female 50-59"
+    cfg.segment = "Male 50-59"
     cfg.policy_train_steps_per_iter = 100_000
-    cfg.folder_name = "MaxEntIRL_continuous_v7_exp6(Female 50-59)"
+    cfg.folder_name = "MaxEntIRL_continuous_v7_exp7"
     cfg.validation = True
 
     trainer = MaxEntIRLTrainer_Continuous(
@@ -33,5 +34,8 @@ if __name__ == "__main__":
         cfg=cfg,
     )
 
+    _t0 = time.time()
     trainer.train()
+    _elapsed = time.time() - _t0
+    print(f"Total training time: {int(_elapsed // 3600)}h {int(_elapsed % 3600 // 60)}m {_elapsed % 60:.1f}s")
 

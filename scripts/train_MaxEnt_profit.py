@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import gymnasium as gym
 from irl.dataset.expert_dataset import ExpertDataset
@@ -17,21 +18,24 @@ gym.register(
 
 if __name__ == "__main__":
     cfg = MaxEntConfig()
-    cfg.reward_lr = 1
-    cfg.reward_lr_end = 0.01 # Decay reward LR from 1 to 0.01 over training — allows larger initial
-    cfg.n_epochs = 10
+    cfg.reward_lr = 1e-1
+    cfg.reward_lr_end = 1e-1
+    cfg.n_epochs = 50
     cfg.rollout_samples = 20
     cfg.segment = "Male 50-59"
-    cfg.policy_train_steps_per_iter = 100_000
-    cfg.folder_name = "MaxEntIRL_profit_v1_exp1"
+    cfg.policy_train_steps_per_iter = 200_000
+    cfg.folder_name = "MaxEntIRL_profit_v7_exp2"
     cfg.validation = True
 
     trainer = MaxEntIRLTrainer_Continuous(
-        initial_reward_weights= np.array([0.7, 0.7, -1, -1, -1, -0.1, 0.1], dtype=np.float32),
+        initial_reward_weights= np.array([0.8, 0.8, -0.5, -0.5, -1.0, -0.2, -1.0], dtype=np.float32),
         expert_trajectories=dataset,
         env_name='V2GEnv-profit',
         cfg=cfg,
     )
 
+    _t0 = time.time()
     trainer.train()
+    _elapsed = time.time() - _t0
+    print(f"Total training time: {int(_elapsed // 3600)}h {int(_elapsed % 3600 // 60)}m {_elapsed % 60:.1f}s")
 
