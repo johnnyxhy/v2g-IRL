@@ -89,9 +89,9 @@ def load_trajectories(input_file, output_file=None):
     work_charge_map = {7.4: 0, 11: 1, 22: 2}
     df['work_charge_index'] = df['Work_Charger_kW'].map(work_charge_map)
     
-    # --- 10. Battery needed and exceeded target ---
-    df['battery_needed_target'] = (np.maximum(0.0, df['SoC_target'] - df['SoC_end'])) ** 2 * (df['Action_Duration_Timesteps']+1)
-    df['battery_exceeded_target'] = (np.maximum(0.0, df['SoC_end'] - df['SoC_target'])) ** 2 * (df['Action_Duration_Timesteps']+1)
+    # --- 10. Battery needed and exceeded target (per-timestep, will be multiplied by action Δt later) ---
+    df['battery_needed_target'] = (np.maximum(0.0, df['SoC_target'] - df['SoC_end'])) ** 2
+    df['battery_exceeded_target'] = (np.maximum(0.0, df['SoC_end'] - df['SoC_target'])) ** 2
 
     # --- 12. Journey failure ---
     # Decided if in row above, location is driving_out or driving_return and SoC_end == 0
@@ -105,12 +105,10 @@ def load_trajectories(input_file, output_file=None):
     )
     df['journey_failure'] = df['journey_failure'].fillna(0.0)
 
-    # --- 13. Charge Action Taken --
-    df['charge_action_taken'] = np.where(
-        (df['amount_charged'] > 0) | (df['amount_discharged'] > 0),
-        1.0/96.0,  # Scale by max possible amount of charge/discharge in one timestep to keep in range [0,1]
-        0
-    )
+    # --- Indicator-based price features ---
+    # Per-timestep price is stored for computing per-action average price later
+    mean_price = df['Energy_Price_Pounds'].mean()  # ≈ 0.27
+
 
     # --- EXTRACT EPISODES ---
     grouped = df.groupby('EpisodeID')
@@ -135,17 +133,6 @@ def load_trajectories(input_file, output_file=None):
         # --- ONLY KEEP HOME AND WORK SEGMENTS ---
         episode_data = episode_data[episode_data['Location'].isin(['home', 'work'])].reset_index(drop=True)
 
-        # --- RECOMPUTE battery_needed/exceeded_target USING END-OF-ACTION SoC ---
-        # Currently SoC_end on each row is per-timestep. We want the SoC at the end
-        # of the entire action (last timestep), to match how the env evaluates features.
-        action_starts = (episode_data.index == 0) | (episode_data['Action_Duration_Timesteps'].shift(1) == 0)
-        action_group = action_starts.cumsum()
-        soc_end_of_action = episode_data.groupby(action_group)['SoC_end'].transform('last')
-        action_duration = episode_data.groupby(action_group)['SoC_end'].transform('size')
-
-        episode_data['battery_needed_target'] = (np.maximum(0.0, episode_data['SoC_target'] - soc_end_of_action)) ** 2 * action_duration
-        episode_data['battery_exceeded_target'] = (np.maximum(0.0, soc_end_of_action - episode_data['SoC_target'])) ** 2 * action_duration
-
         # --- EXTRACT INITIAL VALUES ---
         initial_values = {
             'soc': episode_data['SoC'].iloc[0].item(),
@@ -159,22 +146,49 @@ def load_trajectories(input_file, output_file=None):
             'work_charge_power': episode_data['work_charge_index'].iloc[0].item(),
         }
 
+        # --- Compute per-action timing quality (quadratic in total action amount) ---
+        # An action spans from one action start to the next, where an action start is
+        # the first row or a row where the previous row's Action_Duration_Timesteps == 0
+        action_starts = (episode_data.index == 0) | (episode_data['Action_Duration_Timesteps'].shift(1) == 0)
+        episode_data['action_group'] = action_starts.cumsum()
+
+        # Compute mean price per action (weighted by timesteps with energy transfer)
+        episode_data['has_transfer'] = (episode_data['Amount_Charged_During_Timestep_kWh'].abs() > 0).astype(float)
+        episode_data['price_x_transfer'] = episode_data['Energy_Price_Pounds'] * episode_data['has_transfer']
+        grp = episode_data.groupby('action_group')
+        action_mean_price = grp['price_x_transfer'].transform('sum') / grp['has_transfer'].transform('sum').replace(0, np.nan)
+        action_mean_price = action_mean_price.fillna(mean_price)
+
+        # Price cost penalties: penalize BAD timing (always ≥ 0, no cancellation)
+        # charge_cost_penalty = 10 × amount² × (price / max) — quadratic penalty scaled by how expensive
+        # discharge_cost_penalty = 10 × amount² × (max - price) / max — quadratic penalty scaled by how cheap
+        max_price = df['Energy_Price_Pounds'].max()  # ≈ 0.47
+        episode_data['charge_cost_penalty'] = 10.0 * episode_data['amount_charged'] ** 2 * (action_mean_price / max_price)
+        episode_data['discharge_cost_penalty'] = 10.0 * episode_data['amount_discharged'] ** 2 * ((max_price - action_mean_price) / max_price)
+
+        # Multiply target features by action duration (Δt) so long actions pay more penalty
+        action_dt = grp['Timestep'].transform('count')
+        episode_data['battery_needed_target'] = episode_data['battery_needed_target'] * action_dt
+        episode_data['battery_exceeded_target'] = episode_data['battery_exceeded_target'] * action_dt
+
         # --- Extract only for first entry and when Action_Duration_Timesteps is zero for the row above --- 
         episode_data = episode_data[(episode_data.index == 0) | (episode_data['Action_Duration_Timesteps'].shift(1) == 0)].reset_index(drop=True)
 
         # --- EXTRACT FEATURES ---
-        # [amount_charged, amount_discharged, battery_needed_target, battery_exceeded_target, soc_outside_range, journey_failure]
+        # [amount_charged, amount_discharged, battery_needed_target, battery_exceeded_target, journey_failure, charge_action_taken, energy_price_pounds, energy_price]
 
         features = episode_data[[
             'amount_charged',
             'amount_discharged',
+            'charge_cost_penalty',
+            'discharge_cost_penalty',
             'battery_needed_target',
             'battery_exceeded_target',
             'journey_failure',
         ]].values.astype(np.float64)
 
         # Calculate feature expectations 
-        feature_expectation = np.mean(features, axis=0)
+        feature_expectation = np.sum(features, axis=0)
 
         # --- EXTRACT OBSERVATIONS ---
 
@@ -224,4 +238,4 @@ def load_trajectories(input_file, output_file=None):
 
 
 # Example usage:
-episodes = load_trajectories("data/EVdataset_continuous.csv", output_file="data/processed_trajectories_continuous.json")
+episodes = load_trajectories("data/EVdataset_profit.csv", output_file="data/processed_trajectories_profit.json")

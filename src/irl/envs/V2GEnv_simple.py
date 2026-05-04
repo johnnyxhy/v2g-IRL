@@ -298,7 +298,7 @@ class V2GEnv(gym.Env):
         self.day_stage = 0                                                              # Start before work
 
         self.location = 0                                                               # Start at home
-        self.soc_target = self.energy_for_out  # Target SoC to cover outgoing journey
+        self.soc_target = self.energy_for_out + 0.2  # Target SoC to cover outgoing journey
         self.energy_price = self.energy_price_profile[self.timestep]
         self.time_to_next_journey = self.out_start_timestep
 
@@ -417,7 +417,7 @@ class V2GEnv(gym.Env):
             self.day_stage = 1
             self.timestep = self.out_start_timestep + self.out_duration
             self.time_to_next_journey = self.return_start_timestep - self.timestep
-            self.soc_target = self.energy_for_return  # Target SoC to cover return journey
+            self.soc_target = self.energy_for_return + 0.2  # Target SoC to cover return journey
 
             # Deduct energy for out journey
             energy_used = min(self.energy_for_out, self.soc)
@@ -437,7 +437,7 @@ class V2GEnv(gym.Env):
             self.day_stage = 2
             self.timestep = self.return_start_timestep + self.return_duration
             self.time_to_next_journey = 96 - self.timestep
-            self.soc_target = self.energy_for_out  # No further journeys, but keep target for consistency
+            self.soc_target = self.energy_for_out + 0.2  # No further journeys, but keep target for consistency
 
             # Deduct energy for return journey
             energy_used = min(self.energy_for_return, self.soc)

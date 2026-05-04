@@ -57,8 +57,8 @@ def load_trajectories(input_file, output_file=None):
 
     # 5. Convert Energy to SoC
     df['SoC_end'] = df['Battery_Energy_Level_kWh'] / df['Battery_Capacity_kWh']
-    #df['SoC_target'] = np.where(df['Upcoming_Trip_Energy_kWh'].isna(), 0.0, df['Upcoming_Trip_Energy_kWh'] / df['Battery_Capacity_kWh'])
-    df['SoC_target'] = df['Upcoming_Energy_Requirement_%']
+    df['SoC_target'] = np.where(df['Upcoming_Trip_Energy_kWh'].isna(), 0.0, df['Upcoming_Trip_Energy_kWh'] / df['Battery_Capacity_kWh']) + 0.2
+    #df['SoC_target'] = df['Upcoming_Energy_Requirement_%']
 
     # 6. SoC at start of timestep
     df['SoC'] = df.groupby('EpisodeID')['SoC_end'].shift(1)
@@ -215,6 +215,6 @@ def load_trajectories(input_file, output_file=None):
 
 if __name__ == "__main__":
     episodes = load_trajectories(
-        "data/EVDataset_discrete_profit.csv",
-        output_file="data/processed_trajectories_deep_discrete_profit.json"
+        "data/EVDataset_discrete_pricediff.csv",
+        output_file="data/processed_trajectories_deep_discrete_pricediff.json"
     )

@@ -12,12 +12,15 @@ class V2GEnv(gym.Env):
     - Continuous observation spaces for SoC, SoC_target, energy price
     - Continuous action space for charge/discharge amount
     - squaring encourages soc to stay near target and penalizes large deviations more heavily
+    - Price consideration involved by considering cost of charging and revenue from discharging
 
     Feature Space:
-    - amount_charged: soc charged if charging (0-100)
-    - amount_discharged: soc discharged if discharging (0-100)
-    - battery_needed_target: squared difference from current SoC to target SoC, 0 if met, multiplied by timesteps
-    - battery_exceeded_target: squared amount by which current SoC exceeds target SoC, 0 if not exceeded, multiplied by timesteps 
+    - amount_charged: base SoC increase this action (intrinsic charge reward, always ≥ 0)
+    - amount_discharged: base SoC decrease this action (intrinsic discharge reward, always ≥ 0)
+    - charge_cost_penalty: 10 × amount_charged² × (price / max_price) — quadratic penalty scaled by how expensive (always ≥ 0)
+    - discharge_cost_penalty: 10 × amount_discharged² × (max_price - price) / max_price — quadratic penalty scaled by how cheap (always ≥ 0)
+    - battery_needed_target: squared difference from current SoC to target SoC × Δt
+    - battery_exceeded_target: squared amount by which current SoC exceeds target SoC × Δt
     - journey_failure: 1 if unable to complete journey, else 0
 
     """
@@ -86,6 +89,17 @@ class V2GEnv(gym.Env):
         # --- Reward gamma handling ---
         self.delta_t = 0
 
+        # --- Charge/Discharge profit tracking ---
+        self.action_revenue = 0.0
+
+        # --- Mean energy price for timing quality features ---
+        self.mean_energy_price = float(np.mean(self.energy_price_profile))  # ≈ 0.27
+        self.max_energy_price = float(np.max(self.energy_price_profile))    # = 0.47
+
+        # --- Track mean price during multi-timestep actions ---
+        self.action_price_sum = 0.0
+        self.action_price_count = 0
+
         # --- INFO TRACKING ---
         self.soc_history = []
         self.accumulated_profit = 0.0
@@ -101,7 +115,7 @@ class V2GEnv(gym.Env):
             'timestep': spaces.Box(low=0, high=96, shape=(1,), dtype=np.int64),                                                # 15-minute intervals in a day
             'soc': spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),             # State of Charge
             'soc_target': spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),      # Target State of Charge
-            #'energy_price': spaces.Box(low=0.0, high=0.47, shape=(1,), dtype=np.float32),   # Energy price in pounds
+            'energy_price': spaces.Box(low=0.0, high=0.47, shape=(1,), dtype=np.float32),   # Energy price in pounds
             'battery_capacity': spaces.Box(low=0, high=2, shape=(1,), dtype=np.int64),                                         # Battery capacity in kWh (40 / 60 / 80 kWh)
             'time_to_next_journey': spaces.Box(low=0, high=96, shape=(1,), dtype=np.int64),                                    # Time to next journey start in timesteps
             'current_charger_power': spaces.Box(low=0.0, high=22.0, shape=(1,), dtype=np.float32),  # Current charger power level
@@ -122,18 +136,32 @@ class V2GEnv(gym.Env):
         amount_charged = self.soc_change_this_action if self.soc_change_this_action > 0.0 else 0.0
         amount_discharged = -self.soc_change_this_action if self.soc_change_this_action < 0.0 else 0.0
 
-        # 2. battery_needed_target: difference from current SoC to target SoC, 0 if met
+        # 2. battery_needed_target: difference from current SoC to target SoC, scaled by Δt
         battery_needed_target = (max(0.0, self.soc_target - self.soc)) ** 2 * self.delta_t
 
-        # 3. battery_exceeded_target: amount by which current SoC exceeds target SoC
+        # 3. battery_exceeded_target: amount by which current SoC exceeds target SoC, scaled by Δt
         battery_exceeded_target = (max(0.0, self.soc - self.soc_target)) ** 2 * self.delta_t
 
         # 4. journey_failure: updated separately in step()
         journey_failure = 0.0
 
+        # 5-6. Price cost penalties: penalize BAD timing (always ≥ 0, no cancellation)
+        #   charge_cost_penalty: scales with price/max — high when charging expensive
+        #   discharge_cost_penalty: scales with (max-price)/max — high when discharging cheap
+        max_price = self.max_energy_price
+        if self.action_price_count > 0:
+            action_avg_price = self.action_price_sum / self.action_price_count
+        else:
+            action_avg_price = self.energy_price_profile[min(self.timestep, 95)]
+        
+        charge_cost_penalty = 10.0 * amount_charged ** 2 * (action_avg_price / max_price)
+        discharge_cost_penalty = 10.0 * amount_discharged ** 2 * ((max_price - action_avg_price) / max_price)
+
         return np.array([
             amount_charged,
             amount_discharged,
+            charge_cost_penalty,
+            discharge_cost_penalty,
             battery_needed_target,
             battery_exceeded_target,
             journey_failure,
@@ -146,6 +174,8 @@ class V2GEnv(gym.Env):
         self.feature_history = {
             'amount_charged': [],
             'amount_discharged': [],
+            'charge_cost_penalty': [],
+            'discharge_cost_penalty': [],
             'battery_needed_target': [],
             'battery_exceeded_target': [],
             'journey_failure': [],
@@ -160,9 +190,11 @@ class V2GEnv(gym.Env):
         """
         self.feature_history['amount_charged'].append(features[0])
         self.feature_history['amount_discharged'].append(features[1])
-        self.feature_history['battery_needed_target'].append(features[2])
-        self.feature_history['battery_exceeded_target'].append(features[3])
-        self.feature_history['journey_failure'].append(features[4])
+        self.feature_history['charge_cost_penalty'].append(features[2])
+        self.feature_history['discharge_cost_penalty'].append(features[3])
+        self.feature_history['battery_needed_target'].append(features[4])
+        self.feature_history['battery_exceeded_target'].append(features[5])
+        self.feature_history['journey_failure'].append(features[6])
     
     def calculate_feature_expectations(self):
         """ 
@@ -173,11 +205,13 @@ class V2GEnv(gym.Env):
         """
 
         feature_expectations = np.array([
-            np.mean(self.feature_history['amount_charged']),
-            np.mean(self.feature_history['amount_discharged']),
-            np.mean(self.feature_history['battery_needed_target']),
-            np.mean(self.feature_history['battery_exceeded_target']),
-            np.mean(self.feature_history['journey_failure']),
+            np.sum(self.feature_history['amount_charged']),
+            np.sum(self.feature_history['amount_discharged']),
+            np.sum(self.feature_history['charge_cost_penalty']),
+            np.sum(self.feature_history['discharge_cost_penalty']),
+            np.sum(self.feature_history['battery_needed_target']),
+            np.sum(self.feature_history['battery_exceeded_target']),
+            np.sum(self.feature_history['journey_failure']),
         ], dtype=np.float32)
 
         return feature_expectations
@@ -197,7 +231,7 @@ class V2GEnv(gym.Env):
             'timestep': np.array([self.timestep], dtype=np.int64),
             'soc': np.array([self.soc], dtype=np.float32),
             'soc_target': np.array([self.soc_target], dtype=np.float32),
-            #'energy_price': np.array([self.energy_price_profile[self.timestep]], dtype=np.float32),
+            'energy_price': np.array([self.energy_price_profile[self.timestep]], dtype=np.float32),
             'battery_capacity': np.array([self.battery_capacity], dtype=np.int64),
             'time_to_next_journey': np.array([self.time_to_next_journey], dtype=np.int64),
             'current_charger_power': np.array([current_charger_power], dtype=np.float32)
@@ -259,7 +293,7 @@ class V2GEnv(gym.Env):
 
         # --- INITIALISE REWARD WEIGHTS ---
         if self.reward_weights is None:
-            self.reward_weights = np.array([0.1, 0.1, -1.0, -1.0, -10.0], dtype=np.float32)  # Example weights
+            self.reward_weights = np.array([0.5, 0.5, 0.5, 0.5, -1.0, -0.1, -1.0], dtype=np.float32)  # Example weights
 
         # --- INITIALISE STATES ---
         
@@ -317,7 +351,7 @@ class V2GEnv(gym.Env):
         self.day_stage = 0                                                              # Start before work
 
         self.location = 0                                                               # Start at home
-        self.soc_target = self.energy_for_out  # Target SoC to cover outgoing journey
+        self.soc_target = self.energy_for_out + 0.2  # Target SoC to cover outgoing journey
         self.energy_price = self.energy_price_profile[self.timestep]
         self.time_to_next_journey = self.out_start_timestep
 
@@ -358,6 +392,11 @@ class V2GEnv(gym.Env):
         self.soc_change_this_action = 0.0
         boundary_violation = 0.0
 
+        # Profit
+        self.action_revenue = 0.0
+        self.action_price_sum = 0.0
+        self.action_price_count = 0
+
         battery_cap = self.battery_capacity_map[self.battery_capacity]
         if self.location == 0:  # At home
             max_charge_power = self.home_charge_power_map[self.home_charge_power]
@@ -368,8 +407,8 @@ class V2GEnv(gym.Env):
 
         action = action[0]  # Extract scalar from array
 
-        # Restrict precision of action to 3 decimal places to avoid very small charge/discharge amounts
-        action = np.round(action, 3)
+        # Restrict precision of action to 2 decimal places to avoid very small charge/discharge amounts
+        action = np.round(action, 2)
 
         # No charging/discharging
         if action == 0.0:
@@ -425,8 +464,14 @@ class V2GEnv(gym.Env):
                 self.soc_history.append(self.soc)
                 self.soc_change_this_action += energy_transfer if action > 0 else -energy_transfer
                 
-                # Calculate profit/loss
+                # Track price during action
                 energy_price = self.energy_price_profile[self.timestep - 1]
+                if energy_transfer > 0:
+                    self.action_price_sum += energy_price
+                    self.action_price_count += 1
+
+                # Calculate profit/loss
+                self.action_revenue += energy_transfer * battery_cap * energy_price if action < 0 else -energy_transfer * battery_cap * energy_price
                 if action > 0:  # Charging
                     self.accumulated_profit -= energy_transfer * battery_cap * energy_price
                 else:           # Discharging
@@ -449,7 +494,7 @@ class V2GEnv(gym.Env):
             self.day_stage = 1
             self.timestep = self.out_start_timestep + self.out_duration
             self.time_to_next_journey = max(0, self.return_start_timestep - self.timestep)
-            self.soc_target = self.energy_for_return  # Target SoC to cover return journey
+            self.soc_target = self.energy_for_return + 0.2  # Target SoC to cover return journey
 
             # Deduct energy for out journey
             energy_used = min(self.energy_for_out, self.soc)
@@ -457,7 +502,7 @@ class V2GEnv(gym.Env):
 
             # Penalize journey failure if unable to complete journey
             if energy_used < self.energy_for_out:
-                features[4] = 1.0  # journey_failure feature
+                features[6] = 1.0  # journey_failure feature
 
             # Update soc history after journey
             for _ in range(self.out_duration):
@@ -469,7 +514,7 @@ class V2GEnv(gym.Env):
             self.day_stage = 2
             self.timestep = max(0,self.return_start_timestep + self.return_duration)
             self.time_to_next_journey = 96 - self.timestep
-            self.soc_target = self.energy_for_out  # No further journeys, but keep target for consistency
+            self.soc_target = self.energy_for_out + 0.2  # No further journeys, but keep target for consistency
 
             # Deduct energy for return journey
             energy_used = min(self.energy_for_return, self.soc)
@@ -477,7 +522,7 @@ class V2GEnv(gym.Env):
 
             # Penalize journey failure if unable to complete journey
             if energy_used < self.energy_for_return:
-                features[4] = 1.0  # journey_failure feature
+                features[6] = 1.0  # journey_failure feature
 
             # Update soc history after journey
             for _ in range(self.return_duration):

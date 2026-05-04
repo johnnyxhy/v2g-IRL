@@ -1,0 +1,37 @@
+import time
+import numpy as np
+import gymnasium as gym
+from irl.dataset.expert_dataset import ExpertDataset
+from irl.MaxEnt.MaxEnt_simple import MaxEntIRLTrainer_Simple, MaxEntConfig
+
+dataset = ExpertDataset()
+dataset.load_trajectories_from_json("data/processed_trajectories_simple_probabilistic.json")
+
+# Register environment
+gym.register(
+    id='V2GEnv-simple',
+    entry_point="irl.envs.V2GEnv_simple:V2GEnv",
+    max_episode_steps=96,
+)
+
+cfg = MaxEntConfig()
+cfg.reward_lr = 0.5
+cfg.n_epochs = 20
+cfg.rollout_samples = 10
+cfg.segment = "Male 50-59"
+cfg.policy_train_steps_per_iter = 10_000
+cfg.folder_name = "MaxEntIRL_simple_probabilistic_exp1"
+cfg.validation = True
+
+trainer = MaxEntIRLTrainer_Simple(
+    initial_reward_weights= np.array([-1, 0, -1, -1], dtype=np.float32),
+    expert_trajectories=dataset,
+    env_name='V2GEnv-simple',
+    cfg=cfg,
+)
+
+_t0 = time.time()
+trainer.train()
+_elapsed = time.time() - _t0
+print(f"Total training time: {int(_elapsed // 3600)}h {int(_elapsed % 3600 // 60)}m {_elapsed % 60:.1f}s")
+

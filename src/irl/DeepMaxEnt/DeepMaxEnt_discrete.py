@@ -197,8 +197,10 @@ class DeepMaxEntDiscreteTrainer:
 
         # Tracking
         self.train_dtw_distance = []
+        self.train_mae = []
         self.train_feat_l2 = []
         self.val_dtw_distance = []
+        self.val_mae = []
         self.val_feat_l2 = []
         self.train_reward_loss = []
         self.train_log_likelihood = []
@@ -281,6 +283,7 @@ class DeepMaxEntDiscreteTrainer:
             N = len(self.train_set)
 
             avg_dtw = 0.0
+            avg_mae = 0.0
             avg_feat_l2 = 0.0
             avg_reward_loss = 0.0
             avg_log_likelihood = 0.0
@@ -312,7 +315,9 @@ class DeepMaxEntDiscreteTrainer:
                     rollout_dt_all.append(dt_list)
 
                     expert_soc = np.array(traj.soc_history, dtype=np.float32)
-                    avg_dtw += compute_dtw(expert_soc, np.array(soc_hist, dtype=np.float32)) / (N * cfg.rollout_samples)
+                    agent_soc = np.array(soc_hist, dtype=np.float32)
+                    avg_dtw += compute_dtw(expert_soc, agent_soc) / (N * cfg.rollout_samples)
+                    avg_mae += self._compute_mae(expert_soc, agent_soc) / (N * cfg.rollout_samples)
                     avg_feat_l2 += np.linalg.norm(expert_feat - feat_exp) / (N * cfg.rollout_samples)
 
                 # Compute log Z = logsumexp(R(τ_k)) over rollouts.
@@ -351,32 +356,35 @@ class DeepMaxEntDiscreteTrainer:
 
             # ---------- 3. Validation ----------
             val_dtw = 0.0
+            val_mae = 0.0
             val_feat_l2 = 0.0
             if cfg.validation and len(self.val_set) > 0:
                 print("Validating...")
                 M = len(self.val_set)
                 for traj in tqdm(self.val_set, desc="Validation"):
                     _, _, _, _, soc_hist, feat_exp = self._do_rollout(rollout_env, model, traj)
-                    val_dtw += compute_dtw(
-                        np.array(traj.soc_history, dtype=np.float32),
-                        np.array(soc_hist, dtype=np.float32),
-                    ) / M
+                    expert_soc_v = np.array(traj.soc_history, dtype=np.float32)
+                    agent_soc_v = np.array(soc_hist, dtype=np.float32)
+                    val_dtw += compute_dtw(expert_soc_v, agent_soc_v) / M
+                    val_mae += self._compute_mae(expert_soc_v, agent_soc_v) / M
                     val_feat_l2 += np.linalg.norm(traj.feature_expectation - feat_exp) / M
 
             # ---------- 4. Logging ----------
             self.train_dtw_distance.append(avg_dtw)
+            self.train_mae.append(avg_mae)
             self.train_feat_l2.append(avg_feat_l2)
             self.train_reward_loss.append(avg_reward_loss)
             self.train_log_likelihood.append(avg_log_likelihood)
             if cfg.validation and len(self.val_set) > 0:
                 self.val_dtw_distance.append(val_dtw)
+                self.val_mae.append(val_mae)
                 self.val_feat_l2.append(val_feat_l2)
 
             print(f"--- Epoch {epoch+1}/{cfg.n_epochs} Summary ---")
             print(f"Reward Loss: {avg_reward_loss:.4f}, Log-Likelihood: {avg_log_likelihood:.4f}, LR: {current_lr:.6f}")
-            print(f"Train DTW: {avg_dtw:.4f}, Train Feat L2: {avg_feat_l2:.4f}")
+            print(f"Train DTW: {avg_dtw:.4f}, Train MAE: {avg_mae:.4f}, Train Feat L2: {avg_feat_l2:.4f}")
             if cfg.validation and len(self.val_set) > 0:
-                print(f"Val DTW: {val_dtw:.4f}, Val Feat L2: {val_feat_l2:.4f}")
+                print(f"Val DTW: {val_dtw:.4f}, Val MAE: {val_mae:.4f}, Val Feat L2: {val_feat_l2:.4f}")
 
             # ---------- 5. Save metrics to CSV (append — survives checkpoint continuations) ----------
             metrics_path = f"./models/{cfg.folder_name}/metrics.csv"
@@ -384,15 +392,17 @@ class DeepMaxEntDiscreteTrainer:
             with open(metrics_path, 'a', newline='') as f:
                 writer = csv.writer(f)
                 if write_header:
-                    writer.writerow(['epoch', 'train_dtw', 'train_feat_l2', 'reward_loss',
-                                     'log_likelihood', 'val_dtw', 'val_feat_l2', 'lr'])
+                    writer.writerow(['epoch', 'train_dtw', 'train_mae', 'train_feat_l2', 'reward_loss',
+                                     'log_likelihood', 'val_dtw', 'val_mae', 'val_feat_l2', 'lr'])
                 writer.writerow([
                     epoch + 1,
                     round(avg_dtw, 6),
+                    round(avg_mae, 6),
                     round(avg_feat_l2, 6),
                     round(avg_reward_loss, 6),
                     round(avg_log_likelihood, 6),
                     round(val_dtw, 6) if (cfg.validation and len(self.val_set) > 0) else '',
+                    round(val_mae, 6) if (cfg.validation and len(self.val_set) > 0) else '',
                     round(val_feat_l2, 6) if (cfg.validation and len(self.val_set) > 0) else '',
                     round(current_lr, 8),
                 ])
@@ -404,8 +414,18 @@ class DeepMaxEntDiscreteTrainer:
         print("Training completed.")
 
     # -------------------------------------------------------------- #
-    #  Rollout helper                                                  #
+    #  Helpers                                                         #
     # -------------------------------------------------------------- #
+
+    @staticmethod
+    def _compute_mae(soc_a: np.ndarray, soc_b: np.ndarray) -> float:
+        """MAE between two SoC trajectories, resampling to the longer length."""
+        n = max(len(soc_a), len(soc_b))
+        if len(soc_a) != n:
+            soc_a = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(soc_a)), soc_a)
+        if len(soc_b) != n:
+            soc_b = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(soc_b)), soc_b)
+        return float(np.mean(np.abs(soc_a - soc_b)))
 
     def _do_rollout(self, rollout_env, model, traj, deterministic=False):
         rollout_env.envs[0].unwrapped.set_initial_states(traj.initial_values)
@@ -453,6 +473,15 @@ class DeepMaxEntDiscreteTrainer:
         plt.savefig(f'./models/{cfg.folder_name}/dtw_distance.png')
 
         plt.figure(2)
+        plt.plot(epochs, self.train_mae, label='Train MAE')
+        if cfg.validation and len(self.val_set) > 0 and self.val_mae:
+            plt.plot(epochs, self.val_mae, label='Val MAE')
+            plt.legend()
+        plt.title('Deep MaxEnt Discrete IRL — SoC MAE')
+        plt.xlabel('Epoch'); plt.ylabel('Average MAE'); plt.grid()
+        plt.savefig(f'./models/{cfg.folder_name}/mae.png')
+
+        plt.figure(3)
         plt.plot(epochs, self.train_feat_l2, label='Train Feature L2')
         if cfg.validation and len(self.val_set) > 0:
             plt.plot(epochs, self.val_feat_l2, label='Val Feature L2')
@@ -461,18 +490,19 @@ class DeepMaxEntDiscreteTrainer:
         plt.xlabel('Epoch'); plt.ylabel('Average Feature L2'); plt.grid()
         plt.savefig(f'./models/{cfg.folder_name}/feature_l2.png')
 
-        plt.figure(3)
+        plt.figure(4)
         plt.plot(epochs, self.train_reward_loss)
         plt.title('Deep MaxEnt Discrete IRL — Reward Loss')
         plt.xlabel('Epoch'); plt.ylabel('Loss (neg log-likelihood)'); plt.grid()
         plt.savefig(f'./models/{cfg.folder_name}/reward_loss.png')
 
-        plt.figure(4)
+        plt.figure(5)
         plt.plot(epochs, self.train_log_likelihood)
         plt.axhline(0, color='red', linestyle='--', linewidth=0.8, label='Converged (LL=0)')
         plt.title('Deep MaxEnt Discrete IRL — Expert Log-Likelihood')
         plt.xlabel('Epoch'); plt.ylabel('Avg log p(τ_expert)'); plt.grid()
         plt.legend()
         plt.savefig(f'./models/{cfg.folder_name}/log_likelihood.png')
+
 
         plt.show()

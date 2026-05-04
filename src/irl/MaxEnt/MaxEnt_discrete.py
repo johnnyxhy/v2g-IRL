@@ -134,8 +134,10 @@ class MaxEntIRLTrainer_Discrete_PPO:
         # Tracking
         self.train_l2_loss = []
         self.train_dtw_distance = []
+        self.train_mae = []
         self.val_l2_loss = []
         self.val_dtw_distance = []
+        self.val_mae = []
         self.train_log_likelihood = []
         self.reward_weights_history = []
 
@@ -210,6 +212,7 @@ class MaxEntIRLTrainer_Discrete_PPO:
             avg_expert_feat_exp = np.zeros_like(self.reward_weights)
             avg_traj_feat_exp = np.zeros_like(self.reward_weights)
             avg_dtw_distance = 0.0
+            avg_mae = 0.0
             avg_episode_length = 0.0
             avg_log_likelihood = 0.0
             N = len(self.train_set)
@@ -244,6 +247,7 @@ class MaxEntIRLTrainer_Discrete_PPO:
                     expert_soc = np.array(traj.soc_history, dtype=np.float32)
                     agent_soc = np.array(infos[0]['soc_history'], dtype=np.float32)
                     avg_dtw_distance += compute_dtw(expert_soc, agent_soc) / (N * cfg.rollout_samples)
+                    avg_mae += self._compute_mae(expert_soc, agent_soc) / (N * cfg.rollout_samples)
 
                 # LogSumExp importance weighting
                 max_r = np.max(rewards_arr)
@@ -288,6 +292,7 @@ class MaxEntIRLTrainer_Discrete_PPO:
             # ------ 3. Validation ------
             val_loss = 0.0
             val_dtw_distance = 0.0
+            val_mae = 0.0
             if cfg.validation and len(self.val_set) > 0:
                 print("Validating...")
                 M = len(self.val_set)
@@ -307,29 +312,49 @@ class MaxEntIRLTrainer_Discrete_PPO:
                         np.array(traj.soc_history, dtype=np.float32),
                         np.array(infos[0]['soc_history'], dtype=np.float32),
                     ) / M
+                    val_mae += self._compute_mae(
+                        np.array(traj.soc_history, dtype=np.float32),
+                        np.array(infos[0]['soc_history'], dtype=np.float32),
+                    ) / M
 
             # ------ 4. Logging ------
             self.train_l2_loss.append(average_l2_loss)
             self.train_dtw_distance.append(avg_dtw_distance)
+            self.train_mae.append(avg_mae)
             self.train_log_likelihood.append(avg_log_likelihood)
             if cfg.validation and len(self.val_set) > 0:
                 self.val_l2_loss.append(val_loss)
                 self.val_dtw_distance.append(val_dtw_distance)
+                self.val_mae.append(val_mae)
 
             print(f"--- Epoch {epoch+1}/{cfg.n_epochs} Summary ---")
             print(f"Reward LR: {current_lr:.6f}, Gradient norm: {grad_norm:.4f}")
-            print(f"Train L2: {average_l2_loss:.4f}, Train DTW: {avg_dtw_distance:.4f}, Log-Likelihood: {avg_log_likelihood:.4f}")
+            print(f"Train L2: {average_l2_loss:.4f}, Train DTW: {avg_dtw_distance:.4f}, Train MAE: {avg_mae:.4f}, Log-Likelihood: {avg_log_likelihood:.4f}")
             print(f"Expert feat exp: {avg_expert_feat_exp}")
             print(f"Agent  feat exp: {avg_traj_feat_exp}")
             print(f"Updated weights: {self.reward_weights}")
             print(f"Avg episode length: {avg_episode_length:.2f}")
             if cfg.validation and len(self.val_set) > 0:
-                print(f"Val L2: {val_loss:.4f}, Val DTW: {val_dtw_distance:.4f}")
+                print(f"Val L2: {val_loss:.4f}, Val DTW: {val_dtw_distance:.4f}, Val MAE: {val_mae:.4f}")
 
             model.save(f"./models/{cfg.folder_name}/ppo_epoch{epoch+1}")
 
         self._plot_results()
         print("Training completed.")
+
+    # -------------------------------------------------------------- #
+    #  Helpers                                                         #
+    # -------------------------------------------------------------- #
+
+    @staticmethod
+    def _compute_mae(soc_a: np.ndarray, soc_b: np.ndarray) -> float:
+        """MAE between two SoC trajectories, resampling to the longer length."""
+        n = max(len(soc_a), len(soc_b))
+        if len(soc_a) != n:
+            soc_a = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(soc_a)), soc_a)
+        if len(soc_b) != n:
+            soc_b = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(soc_b)), soc_b)
+        return float(np.mean(np.abs(soc_a - soc_b)))
 
     # -------------------------------------------------------------- #
     #  Plotting                                                        #
@@ -349,6 +374,15 @@ class MaxEntIRLTrainer_Discrete_PPO:
         plt.savefig(f'./models/{cfg.folder_name}/l2_loss.png')
 
         plt.figure(2)
+        plt.plot(epochs, self.train_mae)
+        if cfg.validation and len(self.val_set) > 0 and self.val_mae:
+            plt.plot(epochs, self.val_mae)
+            plt.legend(['Train MAE', 'Validation MAE'])
+        plt.title('MaxEnt IRL (Discrete PPO) — SoC MAE')
+        plt.xlabel('Epoch'); plt.ylabel('Average MAE'); plt.grid()
+        plt.savefig(f'./models/{cfg.folder_name}/mae.png')
+
+        plt.figure(3)
         plt.plot(epochs, self.train_dtw_distance)
         if cfg.validation and len(self.val_set) > 0:
             plt.plot(epochs, self.val_dtw_distance)
@@ -357,7 +391,7 @@ class MaxEntIRLTrainer_Discrete_PPO:
         plt.xlabel('Epoch'); plt.ylabel('Average DTW Distance'); plt.grid()
         plt.savefig(f'./models/{cfg.folder_name}/dtw_distance.png')
 
-        plt.figure(3)
+        plt.figure(4)
         plt.plot(epochs, self.train_log_likelihood)
         plt.axhline(0, color='red', linestyle='--', linewidth=0.8, label='Converged (LL=0)')
         plt.title('MaxEnt IRL (Discrete PPO) — Expert Log-Likelihood')

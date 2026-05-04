@@ -23,7 +23,8 @@ dependencies = [
   "stable-baselines3==2.7.1",
   "imitation",
   "openpyxl",
-  "sbx-rl==0.23.0"
+  "sbx-rl==0.23.0",
+  "shap>=0.51.0",
 ]
 
 [tool.setuptools]

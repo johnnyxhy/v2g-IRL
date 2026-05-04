@@ -23,7 +23,9 @@ class V2GDeepEnv(gym.Env):
         super().__init__()
 
         # --- REWARD SOURCES ---
-        self.reward_net = None          # PyTorch RewardNet (Deep MaxEnt IRL)
+        self.reward_net = None          # PyTorch RewardNet g_θ(s,a) — used by both DeepMaxEnt and AIRL
+        self.shaping_net = None         # PyTorch ShapingNet h_φ(s)   — AIRL only (potential function)
+        self.gamma = 0.99               # Discount factor for AIRL shaping term γ^Δt·h_φ(s')−h_φ(s)
         self.initial_states = None
 
         # --- OBSERVATION NORMALIZATION SCALES ---
@@ -224,8 +226,22 @@ class V2GDeepEnv(gym.Env):
         self.initial_states = initial_states
 
     def set_reward_net(self, reward_net) -> None:
-        """Set the neural network reward function."""
+        """Set the neural network reward function g_θ(s, a)."""
         self.reward_net = reward_net
+
+    def set_shaping_net(self, shaping_net) -> None:
+        """
+        Set the AIRL potential function h_φ(s).
+
+        When set, the environment switches from the DeepMaxEnt reward
+        (g·Δt) to the AIRL reward:
+            f(s,a,s') = g_θ(s,a) + γ^Δt·(1−done)·h_φ(s') − h_φ(s)
+        """
+        self.shaping_net = shaping_net
+
+    def set_gamma(self, gamma: float) -> None:
+        """Set the discount factor used in the AIRL shaping term."""
+        self.gamma = gamma
 
     def set_action_penalty_coeff(self, coeff: float) -> None:
         """Set the action magnitude penalty coefficient λ for -λ·a²."""
@@ -280,7 +296,7 @@ class V2GDeepEnv(gym.Env):
         self.timestep = 0
         self.day_stage = 0
         self.location = 0
-        self.soc_target = self.energy_for_out * 1.5 + 0.2
+        self.soc_target = self.energy_for_out + 0.2
         self.energy_price = self.energy_price_profile[self.timestep]
         self.time_to_next_journey = self.out_start_timestep
 
@@ -396,7 +412,7 @@ class V2GDeepEnv(gym.Env):
             self.day_stage = 1
             self.timestep = self.out_start_timestep + self.out_duration
             self.time_to_next_journey = max(0, self.return_start_timestep - self.timestep)
-            self.soc_target = self.energy_for_return
+            self.soc_target = self.energy_for_return + 0.2
 
             energy_used = min(self.energy_for_out, self.soc)
             self.soc = max(0.0, self.soc - energy_used)
@@ -411,7 +427,7 @@ class V2GDeepEnv(gym.Env):
             self.day_stage = 2
             self.timestep = max(0, self.return_start_timestep + self.return_duration)
             self.time_to_next_journey = 96 - self.timestep
-            self.soc_target = self.energy_for_out
+            self.soc_target = self.energy_for_out + 0.2
 
             energy_used = min(self.energy_for_return, self.soc)
             self.soc = max(0.0, self.soc - energy_used)
@@ -437,11 +453,23 @@ class V2GDeepEnv(gym.Env):
             with torch.no_grad():
                 obs_t = torch.tensor(pre_action_obs_flat, dtype=torch.float32).unsqueeze(0)
                 act_t = torch.tensor([[action_for_reward]], dtype=torch.float32)
-                # Scale by delta_t so that total episode reward is proportional to the
-                # time-integral of R(s,a), not the number of variable-length actions taken.
-                # Without this, PPO learns to take many tiny actions to accumulate more
-                # reward events rather than large, expert-like charge/discharge actions.
-                reward = self.reward_net(obs_t, act_t).item() * self.delta_t * self.reward_scale
+                g = self.reward_net(obs_t, act_t).item()  # g_θ(s, a)
+
+                if self.shaping_net is not None:
+                    # AIRL reward: f(s, a, s') = g_θ(s,a) + γ^Δt·(1−done)·h_φ(s') − h_φ(s)
+                    # s' is the post-step state, captured after the while-loop + day-stage update.
+                    # The (1−done) term ensures we do not bootstrap from a terminal state.
+                    post_obs_flat = self._flatten_obs_for_reward()
+                    obs_post_t = torch.tensor(post_obs_flat, dtype=torch.float32).unsqueeze(0)
+                    gamma_dt = self.gamma ** self.delta_t
+                    h_s  = self.shaping_net(obs_t).item()
+                    h_sp = self.shaping_net(obs_post_t).item()
+                    reward = (
+                        g + gamma_dt * (1.0 - float(terminated)) * h_sp - h_s
+                    ) * self.reward_scale
+                else:
+                    # DeepMaxEnt reward: scale by Δt to prevent many-small-action exploitation.
+                    reward = g * self.delta_t * self.reward_scale
 
         if boundary_violation > 0.0:
             reward -= self.boundary_penalty_per_kwh * boundary_violation * battery_cap * self.delta_t
