@@ -4,9 +4,18 @@ __pycache__/
 *$py.class
 
 # Ignore trained models for now
-models/
-*.zip
+#models/
+old_models/
 tensorboard/
+
+# Ignore all .zip files
+*.zip
+*.pt
+
+# Do not ignore .zip files that contain "epoch_20" in the filename
+!*epoch20*.zip
+!*epoch50*.zip
+!*epoch20*.pt
 
 # C extensions
 *.so
