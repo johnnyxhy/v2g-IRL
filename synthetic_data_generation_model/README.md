@@ -1,5 +1,6 @@
 **EV Charging - Synthetic Data Generation Model**
 
+
 **Key features:**
 
 - One day of data for each of 500 individuals, showing driving, parking, charging and discharging activities across 96 15-minute timesteps. Driving patterns are included exogenously, taken from UK National Travel Survey 2023 NTS metadata.
