@@ -85,4 +85,4 @@ segment_parameters = {
 
 **Data dictionary:**
 
-- See the accompanying data dictionary for descriptions of each of the fields in the dataset.
+- See the accompanying data dictionary for descriptions of each of the fields in the generated datasets.
