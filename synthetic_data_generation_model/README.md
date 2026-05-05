@@ -1,4 +1,4 @@
-**Synthetic data generation model**
+**EV Charging - Synthetic Data Generation Model**
 
 **Key features:**
 
