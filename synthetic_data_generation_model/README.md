@@ -40,12 +40,12 @@ Utility_Energy_Level =
 
 * If there is a surplus in expected energy % post charge action vs the target energy level %, utility is calculated as e^(-8 * the energy gap).
 
-Energy gap = (energy post charge - required energy) / battery capacity
-Energy post charge = current state of charge + charge amount
-Required energy = minimum charge level + trip energy requirement * buffer
-Minimum charge level = 20% of battery capacity in all cases. Buffer = 1.5 in all cases
+Energy gap = (energy post charge - required energy) / battery capacity<br>
+Energy post charge = current state of charge + charge amount<br>
+Required energy = minimum charge level + trip energy requirement * buffer<br>
+Minimum charge level = 20% of battery capacity in all cases. Buffer = 1.5 in all cases<br>
 
-The above means non-linearity in how shortfalls and surpluses are perceived. People are risk averse around the shortfalls, with a steeper drop off in utility for shortfalls below the target level vs a gentler drop off in utility for surpluses above the target level.
+- The above means non-linearity in how shortfalls and surpluses are perceived. People are risk averse around the shortfalls, with a steeper drop off in utility for shortfalls below the target level vs a gentler drop off in utility for surpluses above the target level.
 
 Utility_Price =
 
