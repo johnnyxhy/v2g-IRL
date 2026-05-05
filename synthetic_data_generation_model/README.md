@@ -3,7 +3,7 @@
 
 **Key features:**
 
-- One day of data for each of 500 individuals, showing driving, parking, charging and discharging activities across 96 15-minute timesteps. Driving patterns are included exogenously, taken from UK National Travel Survey 2023 NTS metadata.
+- One day of data for each of 500 individuals, showing driving, parking, charging and discharging activities across 96 15-minute timesteps. Driving patterns are included exogenously, taken from UK National Travel Survey 2023 NTS metadata (this NTS data is included in an accompanying csv file).
 
 - All the individuals are commuters, each travelling from home to work and back during the day. The journey timings, distances and average driving speeds for these commutes vary and come from the NTS data.
   
