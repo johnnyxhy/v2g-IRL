@@ -22,19 +22,19 @@
   
 - Agents make charge, discharge or 'do nothing' decisions in any time steps where they are not driving or charging. Agents calculate the utility of each of these actions via a utility function and then select actions from a probability distribution, using a multinomial logit (MNL) approach.
   
-- This model includes a discrete action space, meaning that utilities are calculated for charging and discharging actions that charge or discharge 10%, 20$, 30%, 40% or 50% of battery capacity. 
+- This model includes a discrete action space, meaning that utilities are calculated for charging and discharging actions that charge or discharge 10%, 20%, 30%, 40% or 50% of battery capacity. 
 
-- Utility functions are as follows:
+**Utility functions:**
 
-Charging utility = (Beta_0_charge + (Beta_1_charge * Utility_Energy_Level) + (Beta_2_charge * Utility_Price)
+- Charging utility = (Beta_0_charge + (Beta_1_charge * Utility_Energy_Level) + (Beta_2_charge * Utility_Price)
 
-Discharging utility = (Beta_0_discharge + (Beta_1_discharge * Utility_Energy_Level) + (Beta_2_discharge * - Utility_Price)
+- Discharging utility = (Beta_0_discharge + (Beta_1_discharge * Utility_Energy_Level) + (Beta_2_discharge * - Utility_Price)
 
-None (no action) = beta0_none 
+- None (no action) = beta0_none 
 
 Where:
 
-Utility_Energy_Level = 
+**- Utility_Energy_Level =**
 
 * For each charge or discharge action, if there is a shortfall in expected energy % post charge action vs the target energy level %, utility is calculated as e^(-15 * the energy gap).
 
@@ -47,12 +47,14 @@ Minimum charge level = 20% of battery capacity in all cases. Buffer = 1.5 in all
 
 The above means non-linearity in how shortfalls and surpluses are perceived. People are risk averse around the shortfalls, with a steeper drop off in utility for shortfalls below the target level vs a gentler drop off in utility for surpluses above the target level.
 
-Utility_Price = 
+**- Utility_Price =**
 
 The prices have been scaled linearly from a utility of 1 for the lowest price (0.07) to -1 for the highest price (0.47). The discharge price utility has a negative sign, meaning it is the opposite of charge utility. E.g. When charge utility = 1, discharge utility = -1.
 
 - Currently, beta_0_charge, beta_0_discharge and beta0_none are all set to zero. If non-zero Beta_0 values are added in, these are 'alternative specific constant' (ASC) values, reflecting any inherent preferences for options over a reference option, before accounting attribute utilities.
 
+**- Betas:**
+  
 The other betas are currently set as follows, reflecting varying attitudes to energy level and price across the EV user segments:
 
 segment_parameters = {
