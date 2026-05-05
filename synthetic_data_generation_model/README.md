@@ -40,10 +40,10 @@ Utility_Energy_Level =
 
 * If there is a surplus in expected energy % post charge action vs the target energy level %, utility is calculated as e^(-8 * the energy gap).
 
-Energy gap = (energy post charge - required energy) / battery capacity<br>
-Energy post charge = current state of charge + charge amount<br>
-Required energy = minimum charge level + trip energy requirement * buffer<br>
-Minimum charge level = 20% of battery capacity in all cases. Buffer = 1.5 in all cases<br>
+- Energy gap = (energy post charge - required energy) / battery capacity<br>
+- Energy post charge = current state of charge + charge amount<br>
+- Required energy = minimum charge level + trip energy requirement * buffer<br>
+- Minimum charge level = 20% of battery capacity in all cases. Buffer = 1.5 in all cases<br>
 
 - The above means non-linearity in how shortfalls and surpluses are perceived. People are risk averse around the shortfalls, with a steeper drop off in utility for shortfalls below the target level vs a gentler drop off in utility for surpluses above the target level.
 
@@ -78,6 +78,6 @@ segment_parameters = {
 
 - Feasible actions are assigned probabilities via the following standard multinomial logit (MNL) formula (assuming. As an example, the probability of selecting action 1 (A1) from 4 possible charging actions (A1, A2, A3 and A4), can be calculated as follows using the MNL method:
 
-Probability of selection A1 = e^A1_Utility / (e^A1_Utility + e^A2_Utility + e^A3_Utility + e^A4_Utility).
+- Probability of selection A1 = e^A1_Utility / (e^A1_Utility + e^A2_Utility + e^A3_Utility + e^A4_Utility).
 
-Probabilities can be calculated in the same way for each possible action. An action is then selected randomly from across the probability distribution.
+- Probabilities can be calculated in the same way for each possible action. An action is then selected randomly from across the probability distribution.
