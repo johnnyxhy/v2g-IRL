@@ -3,11 +3,11 @@
 
 **Key features:**
 
-- One day of data for each of 500 individuals, showing driving, parking, charging and discharging activities across 96 15-minute timesteps. Driving patterns are included exogenously, taken from UK National Travel Survey 2023 NTS metadata (this NTS data is included in an accompanying csv file).
+- One day of data for each of 500 individuals, showing driving, parking, charging and discharging activities across 96 15-minute timesteps. Driving patterns are included exogenously, taken from UK National Travel Survey 2023 NTS metadata. 
 
 - All the individuals are commuters, each travelling from home to work and back during the day. The journey timings, distances and average driving speeds for these commutes vary and come from the NTS data.
   
-- The NTS data was filtered to only include weekday journeys of 10 miles or more and to include 17-20, 21-29, 30-39, 40-49, 50-59 and 60+ age categories, for both males and females, retaining the original % distribution across these segments.
+- The NTS data was filtered to only include weekday journeys of 10 miles or more and to include 17-20, 21-29, 30-39, 40-49, 50-59 and 60+ age categories, for both males and females, retaining the original % distribution across these segments. The raw NTS data is included in an accompanying csv file.
   
 - Three EV battery capacities of 40, 60 and 80 kWh are assigned at random to each individual. These are broadly in keeping with battery sizes of EVs in the market.
   
