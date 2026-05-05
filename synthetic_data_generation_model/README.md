@@ -82,3 +82,7 @@ segment_parameters = {
 - Probability of selection A1 = e^A1_Utility / (e^A1_Utility + e^A2_Utility + e^A3_Utility + e^A4_Utility).
 
 - Probabilities can be calculated in the same way for each possible action. An action is then selected randomly from across the probability distribution.
+
+**Data dictionary:**
+
+- See the accompanying data dictionary for descriptions of each of the fields in the dataset.
