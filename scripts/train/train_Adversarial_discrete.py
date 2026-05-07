@@ -23,13 +23,13 @@ gym.register(
 
 if __name__ == "__main__":
     train_set, val_set = load_airl_expert_data(
-        "data/processed_trajectories_airl_discrete.json",
-        segment="Male 50-59",
+        "data/processed_trajectories_airl_discrete_pricediff.json",
+        segment="Male 40-49",
         train_ratio=0.8,
     )
 
     cfg = AIRLConfig()
-    cfg.n_epochs = 30
+    cfg.n_epochs = 20
     cfg.disc_lr = 1e-3
     cfg.disc_lr_end = 1e-3
     cfg.rollout_samples = 30
@@ -54,10 +54,10 @@ if __name__ == "__main__":
     cfg.bc_lr = 1e-3
     cfg.validation = True
     cfg.n_envs = 4
-    cfg.folder_name = "Adversarial_discrete_exp5"
+    cfg.folder_name = "Adversarial/discrete/Adversarial_discrete_male4049"
 
     cfg.description = (
-        "AIRL exp5. Segment: Male 50-59. 30 epochs, 1.5M PPO steps/epoch, "
+        "Segment: Male 40-49. 20 epochs, 1.5M PPO steps/epoch, "
         "BC pre-training 5000 steps (key fix: policy started from random init, "
         "never visited expert states, discriminator couldn't provide useful gradient). "
         "reward_scale=0.2, disc_epochs=1, ent_coef=0.1, reset_ppo=True, gamma=1.0."

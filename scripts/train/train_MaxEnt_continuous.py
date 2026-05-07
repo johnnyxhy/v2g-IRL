@@ -20,11 +20,11 @@ if __name__ == "__main__":
     cfg = MaxEntConfig()
     cfg.reward_lr = 1e-1
     cfg.reward_lr_end = 1e-1
-    cfg.n_epochs = 50
-    cfg.rollout_samples = 20
+    cfg.n_epochs = 30
+    cfg.rollout_samples = 30
     cfg.segment = "Male 50-59"
-    cfg.policy_train_steps_per_iter = 200_000
-    cfg.folder_name = "MaxEntIRL_profit_v7_exp2"
+    cfg.policy_train_steps_per_iter = 100_000
+    cfg.folder_name = "MaxEnt/continuous/MaxEntIRL_continuous_male5059"
     cfg.validation = True
 
     trainer = MaxEntIRLTrainer_Continuous(

@@ -8,7 +8,7 @@ class V2GEnv(gym.Env):
     Custom Gym Environment for Vehicle-to-Grid (V2G) 
 
     Note:
-    - Continuous observation spaces for SoC, SoC_target, energy price
+    - Continuous observation spaces for SoC, SoC_gap, energy price
     - Discrete action space for charge/discharge amount
     - squaring encourages soc to stay near target and penalizes large deviations more heavily
     - Price consideration involved by considering cost of charging and revenue from discharging
@@ -16,8 +16,8 @@ class V2GEnv(gym.Env):
     Feature Space:
     - amount_charged: base SoC increase this action (intrinsic charge reward, always ≥ 0)
     - amount_discharged: base SoC decrease this action (intrinsic discharge reward, always ≥ 0)
-    - charge_cost_penalty: 10 × amount_charged² × (price / max_price) — quadratic penalty scaled by how expensive (always ≥ 0)
-    - discharge_cost_penalty: 10 × amount_discharged² × (max_price - price) / max_price — quadratic penalty scaled by how cheap (always ≥ 0)
+    - charge_timing_quality: amount_charged × (mean_price − price) / mean_price — positive when charging below mean price, negative when above
+    - discharge_timing_quality: amount_discharged × (price − mean_price) / mean_price — positive when discharging above mean price, negative when below
     - battery_needed_target: squared difference from current SoC to target SoC × Δt
     - battery_exceeded_target: squared amount by which current SoC exceeds target SoC × Δt
     - journey_failure: 1 if unable to complete journey, else 0
@@ -44,6 +44,7 @@ class V2GEnv(gym.Env):
         self.timestep = 0                   # 0 - 95
         self.soc = 0                        # 0.0 - 1.0
         self.soc_target = 0                 # 0.0 - 1.0
+        self.soc_gap = 0                     # 0.0 - 1.0 (target - current)
         self.location = 0                   # 0: home, 1: work
         self.time_to_next_journey = 0       # 0 - 95
 
@@ -113,7 +114,7 @@ class V2GEnv(gym.Env):
         self.observation_space = spaces.Dict({
             'timestep': spaces.Box(low=0, high=96, shape=(1,), dtype=np.int64),                                                # 15-minute intervals in a day
             'soc': spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),             # State of Charge
-            'soc_target': spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),      # Target State of Charge
+            'soc_gap': spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),         # SoC gap (target - current)
             'energy_price': spaces.Box(low=0.0, high=0.47, shape=(1,), dtype=np.float32),   # Energy price in pounds
             'battery_capacity': spaces.Box(low=0, high=2, shape=(1,), dtype=np.int64),                                         # Battery capacity in kWh (40 / 60 / 80 kWh)
             'time_to_next_journey': spaces.Box(low=0, high=96, shape=(1,), dtype=np.int64),                                    # Time to next journey start in timesteps
@@ -145,23 +146,23 @@ class V2GEnv(gym.Env):
         # 4. journey_failure: updated separately in step()
         journey_failure = 0.0
 
-        # 5-6. Price cost penalties: penalize BAD timing (always ≥ 0, no cancellation)
-        #   charge_cost_penalty: scales with price/max — high when charging expensive
-        #   discharge_cost_penalty: scales with (max-price)/max — high when discharging cheap
-        max_price = self.max_energy_price
+        # 5-6. Price timing quality: signed — positive = good timing, negative = bad timing
+        #   charge_timing_quality:    positive when charging below mean price
+        #   discharge_timing_quality: positive when discharging above mean price
+        mean_price = self.mean_energy_price
         if self.action_price_count > 0:
             action_avg_price = self.action_price_sum / self.action_price_count
         else:
             action_avg_price = self.energy_price_profile[min(self.timestep, 95)]
-        
-        charge_cost_penalty = 10.0 * amount_charged ** 2 * (action_avg_price / max_price)
-        discharge_cost_penalty = 10.0 * amount_discharged ** 2 * ((max_price - action_avg_price) / max_price)
+
+        charge_timing_quality    = amount_charged    * (mean_price - action_avg_price) / mean_price
+        discharge_timing_quality = amount_discharged * (action_avg_price - mean_price) / mean_price
 
         return np.array([
             amount_charged,
             amount_discharged,
-            charge_cost_penalty,
-            discharge_cost_penalty,
+            charge_timing_quality,
+            discharge_timing_quality,
             battery_needed_target,
             battery_exceeded_target,
             journey_failure,
@@ -174,8 +175,8 @@ class V2GEnv(gym.Env):
         self.feature_history = {
             'amount_charged': [],
             'amount_discharged': [],
-            'charge_cost_penalty': [],
-            'discharge_cost_penalty': [],
+            'charge_timing_quality': [],
+            'discharge_timing_quality': [],
             'battery_needed_target': [],
             'battery_exceeded_target': [],
             'journey_failure': [],
@@ -190,8 +191,8 @@ class V2GEnv(gym.Env):
         """
         self.feature_history['amount_charged'].append(features[0])
         self.feature_history['amount_discharged'].append(features[1])
-        self.feature_history['charge_cost_penalty'].append(features[2])
-        self.feature_history['discharge_cost_penalty'].append(features[3])
+        self.feature_history['charge_timing_quality'].append(features[2])
+        self.feature_history['discharge_timing_quality'].append(features[3])
         self.feature_history['battery_needed_target'].append(features[4])
         self.feature_history['battery_exceeded_target'].append(features[5])
         self.feature_history['journey_failure'].append(features[6])
@@ -207,8 +208,8 @@ class V2GEnv(gym.Env):
         feature_expectations = np.array([
             np.sum(self.feature_history['amount_charged']),
             np.sum(self.feature_history['amount_discharged']),
-            np.sum(self.feature_history['charge_cost_penalty']),
-            np.sum(self.feature_history['discharge_cost_penalty']),
+            np.sum(self.feature_history['charge_timing_quality']),
+            np.sum(self.feature_history['discharge_timing_quality']),
             np.sum(self.feature_history['battery_needed_target']),
             np.sum(self.feature_history['battery_exceeded_target']),
             np.sum(self.feature_history['journey_failure']),
@@ -230,7 +231,7 @@ class V2GEnv(gym.Env):
         return {
             'timestep': np.array([self.timestep], dtype=np.int64),
             'soc': np.array([self.soc], dtype=np.float32),
-            'soc_target': np.array([self.soc_target], dtype=np.float32),
+            'soc_gap': np.array([self.soc_gap], dtype=np.float32),
             'energy_price': np.array([self.energy_price_profile[self.timestep]], dtype=np.float32),
             'battery_capacity': np.array([self.battery_capacity], dtype=np.int64),
             'time_to_next_journey': np.array([self.time_to_next_journey], dtype=np.int64),
@@ -352,6 +353,7 @@ class V2GEnv(gym.Env):
 
         self.location = 0                                                               # Start at home
         self.soc_target = self.energy_for_out + 0.2  # Target SoC to cover outgoing journey
+        self.soc_gap = self.soc_target - self.soc
         self.energy_price = self.energy_price_profile[self.timestep]
         self.time_to_next_journey = self.out_start_timestep
 
@@ -533,6 +535,7 @@ class V2GEnv(gym.Env):
         else:
             self.time_to_next_journey = max(0, self.time_to_next_journey - (charging_time if action != 0.0 else 1))
 
+        self.soc_gap = self.soc_target - self.soc
         # --- UPDATE FEATURE HISTORY ---
         self.__update_feature_history(features)
 

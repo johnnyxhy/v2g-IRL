@@ -17,8 +17,8 @@ torch.manual_seed(SEED)
 np.random.seed(SEED)
 
 gym.register(
-    id='V2GDeepEnv-profit',
-    entry_point="irl.envs.V2GDeepEnv_profit:V2GDeepEnv",
+    id='V2GDeepEnv-continuous',
+    entry_point="irl.envs.V2GDeepEnv_continuous:V2GDeepEnv",
     max_episode_steps=96,
 )
 
@@ -34,7 +34,7 @@ if __name__ == "__main__":
     cfg = AIRLConfig()
 
     # ---- IRL outer loop ----
-    cfg.n_epochs = 30
+    cfg.n_epochs = 50
     cfg.disc_lr = 1e-3
     cfg.disc_lr_end = 1e-3
     cfg.rollout_samples = 30
@@ -69,10 +69,10 @@ if __name__ == "__main__":
     # ---- Misc ----
     cfg.n_envs = 1
     cfg.validation = True
-    cfg.folder_name = "Adversarial_continuous_exp1"
+    cfg.folder_name = "Adversarial/continuous/AIRL_continuous_male5059"
     cfg.description = (
         "AIRL continuous (profit env), SAC inner loop.\n"
-        "Segment: Male 50-59, 30 epochs, 100k SAC steps/epoch.\n"
+        "Segment: Male 50-59, 50 epochs, 100k SAC steps/epoch.\n"
         "reward_scale=0.2, disc_epochs=1, bc_pretrain_steps=5000.\n"
         "gamma=1.0, ent_coef=auto.\n"
     )
@@ -80,7 +80,7 @@ if __name__ == "__main__":
     trainer = AIRLTrainer(
         train_set=train_set,
         val_set=val_set,
-        env_name='V2GDeepEnv-profit',
+        env_name='V2GDeepEnv-continuous',
         cfg=cfg,
     )
 

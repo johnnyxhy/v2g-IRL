@@ -38,6 +38,7 @@ class V2GDeepEnv(gym.Env):
         self.timestep = 0
         self.soc = 0
         self.soc_target = 0
+        self.soc_gap = 0
         self.location = 0
         self.time_to_next_journey = 0
 
@@ -96,7 +97,7 @@ class V2GDeepEnv(gym.Env):
         self.observation_space = spaces.Dict({
             'timestep': spaces.Box(low=0, high=96, shape=(1,), dtype=np.int64),
             'soc': spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
-            'soc_target': spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
+            'soc_gap': spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
             'energy_price': spaces.Box(low=0.0, high=0.47, shape=(1,), dtype=np.float32),
             'battery_capacity': spaces.Box(low=0, high=2, shape=(1,), dtype=np.int64),
             'time_to_next_journey': spaces.Box(low=0, high=96, shape=(1,), dtype=np.int64),
@@ -121,7 +122,7 @@ class V2GDeepEnv(gym.Env):
         raw = np.array([
             self.timestep,
             self.soc,
-            self.soc_target,
+            self.soc_gap,
             self.energy_price_profile[min(self.timestep, 95)],
             self.battery_capacity,
             self.time_to_next_journey,
@@ -198,7 +199,7 @@ class V2GDeepEnv(gym.Env):
         return {
             'timestep': np.array([self.timestep], dtype=np.int64),
             'soc': np.array([self.soc], dtype=np.float32),
-            'soc_target': np.array([self.soc_target], dtype=np.float32),
+            'soc_gap': np.array([self.soc - self.soc_target], dtype=np.float32),
             'energy_price': np.array([self.energy_price_profile[self.timestep]], dtype=np.float32),
             'battery_capacity': np.array([self.battery_capacity], dtype=np.int64),
             'time_to_next_journey': np.array([self.time_to_next_journey], dtype=np.int64),
@@ -297,6 +298,7 @@ class V2GDeepEnv(gym.Env):
         self.day_stage = 0
         self.location = 0
         self.soc_target = self.energy_for_out + 0.2
+        self.soc_gap = self.soc - self.soc_target
         self.energy_price = self.energy_price_profile[self.timestep]
         self.time_to_next_journey = self.out_start_timestep
 
@@ -445,6 +447,7 @@ class V2GDeepEnv(gym.Env):
             self.time_to_next_journey = max(0, self.time_to_next_journey - (charging_time if action != 0.0 else 1))
 
         self.__update_feature_history(features)
+        self.soc_gap = self.soc - self.soc_target
 
         # --- REWARD ---
         reward = 0.0

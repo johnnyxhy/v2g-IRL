@@ -1,0 +1,1 @@
+Segment: Male 50-59. 30 epochs, 1.5M PPO steps/epoch, BC pre-training 5000 steps (key fix: policy started from random init, never visited expert states, discriminator couldn't provide useful gradient). reward_scale=0.2, disc_epochs=1, ent_coef=0.1, reset_ppo=True, gamma=1.0.

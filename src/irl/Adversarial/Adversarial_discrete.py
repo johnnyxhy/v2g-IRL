@@ -158,7 +158,7 @@ class FlattenNormalizeObsWrapper(gym.ObservationWrapper):
         raw = np.concatenate([
             np.asarray(obs['timestep']).flatten(),
             np.asarray(obs['soc']).flatten(),
-            np.asarray(obs['soc_target']).flatten(),
+            np.asarray(obs['soc_gap']).flatten(),
             np.asarray(obs['energy_price']).flatten(),
             np.asarray(obs['battery_capacity']).flatten(),
             np.asarray(obs['time_to_next_journey']).flatten(),

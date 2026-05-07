@@ -26,19 +26,19 @@ if __name__ == "__main__":
     )
 
     cfg = DeepMaxEntConfig()
-    cfg.n_epochs = 20
+    cfg.n_epochs = 30
     cfg.reward_lr = 1e-3
     cfg.reward_lr_end = 1e-3
-    cfg.rollout_samples = 10
+    cfg.rollout_samples = 30
     cfg.policy_train_steps_per_iter = 100_000
     cfg.reward_hidden_dim = 32
     cfg.segment = "Male 50-59"
-    cfg.folder_name = "Deep_profit_sum_0.05reg_1e-3boundarypenalty_30_continued"
+    cfg.folder_name = "DeepMaxEnt/continuous/DeepMaxEntIRL_continuous_male5059"
     cfg.validation = True
-    cfg.action_penalty_coeff = 0.05
+    cfg.action_penalty_coeff = 0.0
 
     # Warm-start reward network from a previous run (set to None to train from scratch)
-    cfg.pretrained_reward_net_path = "models/Deep_profit_sum_0.05reg_1e-3boundarypenalty_30/reward_net_epoch30.pt"
+    #cfg.pretrained_reward_net_path = "models/DeepMaxEnt/continuous/DeepMaxEntIRL_continuous_male5059/reward_net_epoch30.pt"
 
     trainer = DeepMaxEntIRLTrainer(
         train_set=train_set,

@@ -69,13 +69,14 @@ def load_trajectories(input_file, output_file=None):
     )
     # --- 5. Convert Energy to SoC ---
     df['SoC_end'] = df['Battery_Energy_Level_kWh'] / df['Battery_Capacity_kWh'] # This value is SOC at end of timestep
-    df['SoC_target'] = np.where(df['Upcoming_Trip_Energy_kWh'].isna(), 0.0, df['Upcoming_Trip_Energy_kWh'] / df['Battery_Capacity_kWh'])
+    df['SoC_target'] = np.where(df['Upcoming_Trip_Energy_kWh'].isna(), 0.0, df['Upcoming_Trip_Energy_kWh'] / df['Battery_Capacity_kWh']) + 0.2
 
     # --- 6. Find SoC at start of timestep ---
     df['SoC'] = df.groupby('EpisodeID')['SoC_end'].shift(1)
     # first timestep SoC is initial SoC
     first_timesteps = df['Timestep'] == 0
     df.loc[first_timesteps, 'SoC'] = df.loc[first_timesteps, 'Initial_Energy_kWh'] / df.loc[first_timesteps, 'Battery_Capacity_kWh']
+    df['SoC_gap'] = df['SoC'] - df['SoC_target']
 
     # --- 7. Convert Total Charge to Percentage of Battery Capacity ---
     df['amount_charged'] = (df['Total_Charge_kWh'] / df['Battery_Capacity_kWh']).fillna(0.0) 

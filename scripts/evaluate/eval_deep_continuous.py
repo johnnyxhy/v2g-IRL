@@ -9,8 +9,8 @@ import torch
 import json
 
 gym.register(
-    id='V2GDeepEnv-profit',
-    entry_point="irl.envs.V2GDeepEnv_profit:V2GDeepEnv",
+    id='V2GDeepEnv-continuous',
+    entry_point="irl.envs.V2GDeepEnv_continuous:V2GDeepEnv",
     max_episode_steps=96,
 )
 
@@ -245,7 +245,7 @@ def evaluate(vec_env, model, expert_data, expert_index, reward_net=None, n_rollo
 
 if __name__ == "__main__":
     # --- Configuration ---
-    experiment_folder = "DeepMaxEnt/continuous/Deep_profit_sum_0.01reg_50charge_5.0gradclip_continued"  # Must match the folder_name used during training
+    experiment_folder = "DeepMaxEnt/continuous/DeepMaxEntIRL_continuous_male5059"  # Must match the folder_name used during training
     epoch_to_load = 20
     segment = "Male 50-59"
     hidden_dim = 32  # Must match the hidden_dim used during training
@@ -266,7 +266,7 @@ if __name__ == "__main__":
         hidden_dim=hidden_dim,
     )
 
-    vec_env = DummyVecEnv([lambda: gym.make('V2GDeepEnv-profit')])
+    vec_env = DummyVecEnv([lambda: gym.make('V2GDeepEnv-continuous')])
 
     expert_indexes = find_expert_indexes(expert_data, segment)
     n_eval = max(1, int(len(expert_indexes) * eval_ratio))

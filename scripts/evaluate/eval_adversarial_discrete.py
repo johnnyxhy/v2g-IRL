@@ -74,6 +74,25 @@ def _resample_trajectory(values, target_len):
     return np.interp(dst_x, src_x, values).astype(np.float32)
 
 
+def _price_gap_stats(obs_raw, acts_norm):
+    """
+    Compute avg energy price and avg soc_gap for charge/discharge actions.
+    obs_raw:   (N, 7) raw (unnormalized) observations
+    acts_norm: (N,)   actions in [-1, 1]; charge > 0.05, discharge < -0.05
+    """
+    obs_raw   = np.asarray(obs_raw,   dtype=np.float32)
+    acts_norm = np.asarray(acts_norm, dtype=np.float32).flatten()
+    prices   = obs_raw[:, 3]  # energy_price (£/kWh)
+    soc_gaps = obs_raw[:, 2]  # soc_gap
+    result = {}
+    for name, mask in [('charge', acts_norm > 0.05), ('discharge', acts_norm < -0.05)]:
+        n = int(mask.sum())
+        result[f'{name}_n']     = n
+        result[f'{name}_price'] = float(prices[mask].mean())   if n > 0 else float('nan')
+        result[f'{name}_gap']   = float(soc_gaps[mask].mean()) if n > 0 else float('nan')
+    return result
+
+
 def compute_g_score(traj, reward_net):
     """Sum of g_theta(s,a)*delta_t over an AIRL expert trajectory."""
     obs_scales = torch.tensor(PROFIT_OBS_SCALES, dtype=torch.float32)
@@ -105,6 +124,8 @@ def evaluate(vec_env, model, expert_data, expert_index,
     all_feat_exp = []
     all_soc_histories = []
     all_mae = []
+    agent_obs_all  = []   # normalized obs collected across all rollouts
+    agent_acts_all = []   # raw discrete actions (0-20)
 
     best_dtw = float('inf')
     best_soc_history = None
@@ -117,7 +138,10 @@ def evaluate(vec_env, model, expert_data, expert_index,
         obs = vec_env.reset()
         accumulated_reward = 0.0
         while True:
+            pre_obs = obs[0].copy()  # normalized obs before step
             action, _ = model.predict(obs, deterministic=deterministic)
+            agent_obs_all.append(pre_obs)
+            agent_acts_all.append(int(action[0]))
             obs, rewards, done, info = vec_env.step(action)
             accumulated_reward += float(rewards[0])
             if done[0]:
@@ -184,6 +208,25 @@ def evaluate(vec_env, model, expert_data, expert_index,
         f"IS={interval_score:.3f}, {reward_str}"
     )
 
+    # --- price / gap comparison ---
+    exp_obs_raw  = np.array(traj['state_action_pairs']['observations'], dtype=np.float32)
+    exp_acts_raw = np.array(traj['state_action_pairs']['actions'],      dtype=np.float32).flatten()
+    exp_acts_norm = (exp_acts_raw - 10.0) / 10.0 if exp_acts_raw.max() > 1.1 else exp_acts_raw
+    expert_stats = _price_gap_stats(exp_obs_raw, exp_acts_norm)
+
+    agent_obs_raw  = np.array(agent_obs_all) * np.array(PROFIT_OBS_SCALES, dtype=np.float32)
+    agent_acts_norm = (np.array(agent_acts_all, dtype=np.float32) - 10.0) / 10.0
+    agent_stats = _price_gap_stats(agent_obs_raw, agent_acts_norm)
+
+    for act_type in ('charge', 'discharge'):
+        e = expert_stats
+        a = agent_stats
+        print(
+            f"  {act_type.capitalize():>10}: "
+            f"Expert n={e[f'{act_type}_n']:>4}, price={e[f'{act_type}_price']:.3f}, gap={e[f'{act_type}_gap']:+.3f}  |  "
+            f"Agent  n={a[f'{act_type}_n']/n_rollouts:>5.1f}, price={a[f'{act_type}_price']:.3f}, gap={a[f'{act_type}_gap']:+.3f}"
+        )
+
     if plot and best_mae_info is not None:
         _plot(
             best_mae_soc_history, expert_soc, expert_index,
@@ -193,7 +236,7 @@ def evaluate(vec_env, model, expert_data, expert_index,
             min_soc=min_soc, max_soc=max_soc,
         )
 
-    return dtw_mean, interval_score, mae_mean, best_dtw, best_mae_val, all_dtw, all_mae
+    return dtw_mean, interval_score, mae_mean, best_dtw, best_mae_val, all_dtw, all_mae, agent_stats, expert_stats
 
 
 # ------------------------------------------------------------------ #
@@ -248,10 +291,10 @@ def _plot(soc_history, expert_soc, expert_index,
 
 if __name__ == "__main__":
     # ---- Configuration ----
-    experiment_folder  = "Adversarial/discrete/Adversarial_discrete_exp5"  # folder under models/
-    epoch_to_load      = 30                            # which epoch checkpoint to load
-    expert_data_path   = "data/processed_trajectories_airl_discrete.json"
-    segment            = "Male 50-59"
+    experiment_folder  = "Adversarial/discrete/Adversarial_discrete_male4049"  # folder under models/
+    epoch_to_load      = 20                            # which epoch checkpoint to load
+    expert_data_path   = "data/processed_trajectories_airl_discrete_pricediff.json"
+    segment            = "Male 40-49"
     reward_hidden_dim  = 32    # must match cfg.reward_hidden_dim used during training
     shaping_hidden_dim = 32    # must match cfg.shaping_hidden_dim used during training
     n_rollouts         = 20    # stochastic rollouts per trajectory
@@ -287,10 +330,12 @@ if __name__ == "__main__":
     all_rollout_dtw = []
     all_rollout_mae = []
     all_is = []
+    all_agent_stats = []
+    all_expert_stats = []
 
     for i, idx in enumerate(expert_indexes):
         print(f"\nTrajectory {idx} ({i+1}/{len(expert_indexes)})...")
-        dtw_mean_t, is_score, mae_mean_t, best_dtw, best_mae, traj_dtw, traj_mae = evaluate(
+        dtw_mean_t, is_score, mae_mean_t, best_dtw, best_mae, traj_dtw, traj_mae, ag_stats, ex_stats = evaluate(
             vec_env, model, expert_data, idx,
             reward_net=reward_net,
             n_rollouts=n_rollouts,
@@ -300,6 +345,12 @@ if __name__ == "__main__":
         all_rollout_dtw.extend(traj_dtw)
         all_rollout_mae.extend(traj_mae)
         all_is.append(is_score)
+        all_agent_stats.append(ag_stats)
+        all_expert_stats.append(ex_stats)
+
+    def _avg_stat(stats_list, key):
+        vals = [s[key] for s in stats_list if not np.isnan(s[key])]
+        return float(np.mean(vals)) if vals else float('nan')
 
     print(f"\n{'='*60}")
     print(f"Summary over {len(expert_indexes)} trajectories x {n_rollouts} rollouts [{segment}]:")
@@ -308,4 +359,15 @@ if __name__ == "__main__":
     print(f"  Avg IS   : {np.mean(all_is):.3f} ± {np.std(all_is):.3f}")
     print(f"  Median DTW : {np.median(all_rollout_dtw):.3f}")
     print(f"  Median MAE : {np.median(all_rollout_mae):.4f}")
+    print(f"  --- Avg charge/discharge price & SoC gap ---")
+    for act_type in ('charge', 'discharge'):
+        ep = _avg_stat(all_expert_stats, f'{act_type}_price')
+        eg = _avg_stat(all_expert_stats, f'{act_type}_gap')
+        ap = _avg_stat(all_agent_stats,  f'{act_type}_price')
+        ag = _avg_stat(all_agent_stats,  f'{act_type}_gap')
+        print(
+            f"  {act_type.capitalize():>10}: "
+            f"Expert price={ep:.3f}, gap={eg:+.3f}  |  "
+            f"Agent  price={ap:.3f}, gap={ag:+.3f}"
+        )
     print(f"{'='*60}")

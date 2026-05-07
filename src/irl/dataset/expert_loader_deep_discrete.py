@@ -64,6 +64,7 @@ def load_trajectories(input_file, output_file=None):
     df['SoC'] = df.groupby('EpisodeID')['SoC_end'].shift(1)
     first_timesteps = df['Timestep'] == 0
     df.loc[first_timesteps, 'SoC'] = df.loc[first_timesteps, 'Initial_Energy_kWh'] / df.loc[first_timesteps, 'Battery_Capacity_kWh']
+    df['SoC_gap'] = df['SoC'] - df['SoC_target']
 
     # 7. Charge/discharge amounts as SoC fractions
     df['amount_charged'] = (df['Total_Charge_kWh'] / df['Battery_Capacity_kWh']).fillna(0.0)
@@ -156,7 +157,7 @@ def load_trajectories(input_file, output_file=None):
         delta_ts = []
 
         for _, row in action_start_rows.iterrows():
-            # Observation: [timestep, soc, soc_target, energy_price, battery_cap_index, time_to_next_journey, charger_power_kW]
+            # Observation: [timestep, soc, soc_gap, energy_price, battery_cap_index, time_to_next_journey, charger_power_kW]
             if row['Location'] == 'home':
                 charger_power = row['Home_Charger_kW']
             else:
@@ -165,7 +166,7 @@ def load_trajectories(input_file, output_file=None):
             obs = [
                 float(row['Timestep']),
                 float(row['SoC']),
-                float(row['SoC_target']),
+                float(row['SoC_gap']),
                 float(row['Energy_Price_Pounds']),
                 float(row['battery_cap_index']),
                 float(row['timesteps_to_next_journey']),
@@ -216,5 +217,5 @@ def load_trajectories(input_file, output_file=None):
 if __name__ == "__main__":
     episodes = load_trajectories(
         "data/EVDataset_discrete_pricediff.csv",
-        output_file="data/processed_trajectories_deep_discrete_pricediff.json"
+        output_file="data/processed_trajectories_deep_discrete_gap_pricediff.json"
     )

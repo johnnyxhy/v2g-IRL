@@ -273,10 +273,10 @@ def evaluate(vec_env, model, expert_data, expert_index, n_rollouts=10, determini
 
 if __name__ == "__main__":
     # --- Configuration ---
-    experiment_folder = "MaxEnt/discrete/MaxEntIRL_discrete_pricediff_male4049"  # Must match the folder_name used during training
+    experiment_folder = "MaxEnt/discrete/MaxEntIRL_discrete_pricediff_male5059_charge"  # Must match the folder_name used during training
     epoch_to_load = 20
     expert_data_path = "data/processed_trajectories_discrete_pricediff.json"
-    segment = "Male 40-49"
+    segment = "Male 50-59"
     n_rollouts = 20
     n_figures = 5              # number of example figures to display
     eval_ratio = 1.0           # fraction of segment trajectories to evaluate (1.0 = all)

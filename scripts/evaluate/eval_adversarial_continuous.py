@@ -22,8 +22,8 @@ from irl.Adversarial.Adversarial_continuous import ShapingNet, FlattenNormalizeO
 from irl.utils.tools import compute_dtw
 
 gym.register(
-    id='V2GDeepEnv-profit',
-    entry_point="irl.envs.V2GDeepEnv_profit:V2GDeepEnv",
+    id='V2GDeepEnv-continuous',
+    entry_point="irl.envs.V2GDeepEnv_continuous:V2GDeepEnv",
     max_episode_steps=96,
 )
 
@@ -245,8 +245,8 @@ def _plot(soc_history, expert_soc, expert_index,
 
 if __name__ == "__main__":
     # ---- Configuration ----
-    experiment_folder  = "Adversarial_continuous_exp1"  # folder under models/
-    epoch_to_load      = 30                              # which epoch checkpoint to load
+    experiment_folder  = "Adversarial/continuous/AIRL_continuous_male5059"  # folder under models/
+    epoch_to_load      = 50                              # which epoch checkpoint to load
     expert_data_path   = "data/processed_trajectories_airl_continuous.json"
     segment            = "Male 50-59"
     reward_hidden_dim  = 32    # must match cfg.reward_hidden_dim used during training
@@ -269,7 +269,7 @@ if __name__ == "__main__":
     model = SAC.load(f"./models/{experiment_folder}/sac_epoch{epoch_to_load}")
 
     vec_env = DummyVecEnv([
-        lambda: FlattenNormalizeObsWrapper(gym.make('V2GDeepEnv-profit'))
+        lambda: FlattenNormalizeObsWrapper(gym.make('V2GDeepEnv-continuous'))
     ])
     # Set AIRL reward components so rollout rewards reflect f(s,a,s')
     vec_env.envs[0].unwrapped.set_reward_net(reward_net)

@@ -2,10 +2,9 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-# Observation normalization scales for the profit variant
-# Order: [timestep, soc, soc_target, energy_price, battery_capacity, time_to_next_journey, current_charger_power]
+# Observation normalization scales for the gap variant
+# Order: [timestep, soc, soc_gap, energy_price, battery_capacity, time_to_next_journey, current_charger_power]
 PROFIT_OBS_SCALES = np.array([96.0, 1.0, 1.0, 0.47, 2.0, 96.0, 22.0], dtype=np.float32)
-
 
 class RewardNet(nn.Module):
     """
@@ -57,7 +56,7 @@ def flatten_obs_dict(obs_dict, scales=PROFIT_OBS_SCALES):
     raw = np.array([
         float(obs_dict['timestep'].flatten()[0]),
         float(obs_dict['soc'].flatten()[0]),
-        float(obs_dict['soc_target'].flatten()[0]),
+        float(obs_dict['soc_gap'].flatten()[0]),
         float(obs_dict['energy_price'].flatten()[0]),
         float(obs_dict['battery_capacity'].flatten()[0]),
         float(obs_dict['time_to_next_journey'].flatten()[0]),

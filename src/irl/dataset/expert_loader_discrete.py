@@ -76,6 +76,7 @@ def load_trajectories(input_file, output_file=None):
     # first timestep SoC is initial SoC
     first_timesteps = df['Timestep'] == 0
     df.loc[first_timesteps, 'SoC'] = df.loc[first_timesteps, 'Initial_Energy_kWh'] / df.loc[first_timesteps, 'Battery_Capacity_kWh']
+    df['SoC_gap'] = df['SoC'] - df['SoC_target']  # SoC gap (current - target)
 
     # --- 7. Convert Total Charge to Percentage of Battery Capacity ---
     df['amount_charged'] = (df['Total_Charge_kWh'] / df['Battery_Capacity_kWh']).fillna(0.0) 
@@ -159,12 +160,11 @@ def load_trajectories(input_file, output_file=None):
         action_mean_price = grp['price_x_transfer'].transform('sum') / grp['has_transfer'].transform('sum').replace(0, np.nan)
         action_mean_price = action_mean_price.fillna(mean_price)
 
-        # Price cost penalties: penalize BAD timing (always ≥ 0, no cancellation)
-        # charge_cost_penalty = 10 × amount² × (price / max) — quadratic penalty scaled by how expensive
-        # discharge_cost_penalty = 10 × amount² × (max - price) / max — quadratic penalty scaled by how cheap
-        max_price = df['Energy_Price_Pounds'].max()  # ≈ 0.47
-        episode_data['charge_cost_penalty'] = 10.0 * episode_data['amount_charged'] ** 2 * (action_mean_price / max_price)
-        episode_data['discharge_cost_penalty'] = 10.0 * episode_data['amount_discharged'] ** 2 * ((max_price - action_mean_price) / max_price)
+        # Signed price timing quality features
+        # charge_timing_quality:    positive when charging below mean price, negative when above
+        # discharge_timing_quality: positive when discharging above mean price, negative when below
+        episode_data['charge_timing_quality']    = episode_data['amount_charged']    * (mean_price - action_mean_price) / mean_price
+        episode_data['discharge_timing_quality'] = episode_data['amount_discharged'] * (action_mean_price - mean_price) / mean_price
 
         # Multiply target features by action duration (Δt) so long actions pay more penalty
         action_dt = grp['Timestep'].transform('count')
@@ -180,8 +180,8 @@ def load_trajectories(input_file, output_file=None):
         features = episode_data[[
             'amount_charged',
             'amount_discharged',
-            'charge_cost_penalty',
-            'discharge_cost_penalty',
+            'charge_timing_quality',
+            'discharge_timing_quality',
             'battery_needed_target',
             'battery_exceeded_target',
             'journey_failure',

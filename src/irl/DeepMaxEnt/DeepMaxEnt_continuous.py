@@ -1,5 +1,6 @@
 import numpy as np
 import json
+import csv
 import gymnasium as gym
 from dataclasses import dataclass, field
 from sbx import SAC
@@ -10,7 +11,6 @@ from irl.DeepMaxEnt.DeepMaxEnt import RewardNet, flatten_obs_dict, PROFIT_OBS_SC
 from irl.utils.tools import compute_dtw
 from irl.utils.variable_dt_buffer import VariableDtReplayBuffer
 from tqdm import tqdm
-import math
 import os
 
 import torch
@@ -52,6 +52,10 @@ class DeepMaxEntConfig:
     # Action magnitude penalty
     action_penalty_coeff: float = 0.0   # λ for -λ·a² in env reward
 
+    # Reward net regularization
+    reward_grad_clip: float = 5.0
+    reward_l2_reg: float = 0.01
+
     # Saving
     folder_name: str = "DeepMaxEntIRL_profit"
     validation: bool = False
@@ -69,6 +73,7 @@ class DeepExpertTrajectory:
     soc_history: list
     observations: np.ndarray      # (n_actions, obs_dim)  raw, unnormalized
     actions: np.ndarray           # (n_actions, 1)
+    delta_ts: np.ndarray          # (n_actions,) number of env timesteps per action
     feature_expectation: np.ndarray   # (n_features,) for monitoring
 
 
@@ -84,13 +89,17 @@ def load_deep_expert_data(json_path, segment=None, train_ratio=0.8):
 
     trajectories = []
     for traj in data:
+        sap = traj['state_action_pairs']
+        n_actions = len(sap['actions'])
         expert = DeepExpertTrajectory(
             episodeID=traj['episodeID'],
             segment=traj['segment'],
             initial_values=traj['initial_values'],
             soc_history=traj['soc_history'],
-            observations=np.array(traj['state_action_pairs']['observations'], dtype=np.float32),
-            actions=np.array(traj['state_action_pairs']['actions'], dtype=np.float32),
+            observations=np.array(sap['observations'], dtype=np.float32),
+            actions=np.array(sap['actions'], dtype=np.float32),
+            delta_ts=np.array(sap['delta_ts'], dtype=np.float32) if 'delta_ts' in sap
+                     else np.ones(n_actions, dtype=np.float32),
             feature_expectation=np.array(traj['feature_expectation'], dtype=np.float32),
         )
         trajectories.append(expert)
@@ -140,8 +149,9 @@ class DeepMaxEntIRLTrainer:
                 torch.load(cfg.pretrained_reward_net_path, weights_only=True)
             )
             print(f"Loaded pretrained reward network from {cfg.pretrained_reward_net_path}")
-        self.reward_optimizer = torch.optim.Adam(
-            self.reward_net.parameters(), lr=cfg.reward_lr
+        self.reward_optimizer = torch.optim.AdamW(
+            self.reward_net.parameters(), lr=cfg.reward_lr,
+            weight_decay=cfg.reward_l2_reg,
         )
         self.reward_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.reward_optimizer, T_max=cfg.n_epochs, eta_min=cfg.reward_lr_end
@@ -238,20 +248,24 @@ class DeepMaxEntIRLTrainer:
                 expert_act = torch.tensor(traj.actions, dtype=torch.float32)
                 expert_feat = traj.feature_expectation
 
-                # Expert reward term (with grad) — sum over steps (trajectory reward)
-                expert_reward = self.reward_net(expert_obs, expert_act).sum()
+                # Expert reward: R_net(s,a) weighted by delta_t (matches SAC's cumulative reward)
+                expert_dt = torch.tensor(traj.delta_ts, dtype=torch.float32)
+                expert_reward = (self.reward_net(expert_obs, expert_act) * expert_dt).sum()
 
                 # --- Agent rollouts ---
                 rollout_obs_all = []
                 rollout_act_all = []
                 rollout_env_rewards = []
 
+                rollout_dt_all = []
+
                 for _ in range(cfg.rollout_samples):
-                    obs_list, act_list, env_reward, soc_hist, feat_exp = self._do_rollout(
+                    obs_list, act_list, dt_list, env_reward, soc_hist, feat_exp = self._do_rollout(
                         rollout_env, model, traj
                     )
                     rollout_obs_all.append(obs_list)
                     rollout_act_all.append(act_list)
+                    rollout_dt_all.append(dt_list)
                     rollout_env_rewards.append(env_reward)
 
                     # DTW / MAE monitoring
@@ -271,7 +285,8 @@ class DeepMaxEntIRLTrainer:
                 for k in range(cfg.rollout_samples):
                     obs_t = torch.tensor(np.array(rollout_obs_all[k]), dtype=torch.float32)
                     act_t = torch.tensor(np.array(rollout_act_all[k]), dtype=torch.float32)
-                    r_k = self.reward_net(obs_t, act_t).sum()  # sum over steps
+                    dt_t  = torch.tensor(np.array(rollout_dt_all[k]),  dtype=torch.float32)
+                    r_k = (self.reward_net(obs_t, act_t) * dt_t).sum()
                     rollout_rewards.append(r_k)
 
                 # log Z: differentiable; gradient = softmax-weighted ∇θ R(τ_k)
@@ -285,7 +300,10 @@ class DeepMaxEntIRLTrainer:
                 loss_traj.backward()
                 avg_reward_loss += loss_traj.item()
 
-            # Step optimizer
+            if cfg.reward_grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(
+                    self.reward_net.parameters(), max_norm=cfg.reward_grad_clip
+                )
             self.reward_optimizer.step()
             self.reward_scheduler.step()
 
@@ -299,7 +317,7 @@ class DeepMaxEntIRLTrainer:
                 print("Validating...")
                 M = len(self.val_set)
                 for traj in tqdm(self.val_set, desc="Validation"):
-                    _, _, _, soc_hist, feat_exp = self._do_rollout(
+                    _, _, _, _, soc_hist, feat_exp = self._do_rollout(
                         rollout_env, model, traj, deterministic=False
                     )
                     expert_soc = np.array(traj.soc_history, dtype=np.float32)
@@ -325,7 +343,27 @@ class DeepMaxEntIRLTrainer:
             if cfg.validation and len(self.val_set) > 0:
                 print(f"Val DTW: {val_dtw:.4f}, Val MAE: {val_mae:.4f}, Val Feat L2: {val_feat_l2:.4f}")
 
-            # Save checkpoints
+            # Save metrics to CSV (append — survives checkpoint continuations)
+            metrics_path = f"./models/{cfg.folder_name}/metrics.csv"
+            write_header = not os.path.exists(metrics_path)
+            with open(metrics_path, 'a', newline='') as f:
+                writer = csv.writer(f)
+                if write_header:
+                    writer.writerow(['epoch', 'train_dtw', 'train_mae', 'train_feat_l2', 'reward_loss',
+                                     'log_likelihood', 'val_dtw', 'val_mae', 'val_feat_l2', 'lr'])
+                writer.writerow([
+                    epoch + 1,
+                    round(avg_dtw, 6),
+                    round(avg_mae, 6),
+                    round(avg_feat_l2, 6),
+                    round(avg_reward_loss, 6),
+                    round(avg_log_likelihood, 6),
+                    round(val_dtw, 6) if (cfg.validation and len(self.val_set) > 0) else '',
+                    round(val_mae, 6) if (cfg.validation and len(self.val_set) > 0) else '',
+                    round(val_feat_l2, 6) if (cfg.validation and len(self.val_set) > 0) else '',
+                    round(current_lr, 8),
+                ])
+
             model.save(f"./models/{cfg.folder_name}/sac_epoch{epoch+1}")
             torch.save(self.reward_net.state_dict(), f"./models/{cfg.folder_name}/reward_net_epoch{epoch+1}.pt")
 
@@ -362,6 +400,7 @@ class DeepMaxEntIRLTrainer:
 
         obs_list = []
         act_list = []
+        dt_list = []
         traj_reward = 0.0
         done = False
 
@@ -374,13 +413,14 @@ class DeepMaxEntIRLTrainer:
 
             obs, reward, dones, infos = rollout_env.step(action)
             traj_reward += reward[0]
+            dt_list.append(infos[0]['delta_t'])
 
             done = bool(dones[0])
 
         soc_history = infos[0]['soc_history']
         feature_expectation = np.array(infos[0]['feature_expectation'], dtype=np.float32)
 
-        return obs_list, act_list, traj_reward, soc_history, feature_expectation
+        return obs_list, act_list, dt_list, traj_reward, soc_history, feature_expectation
 
     # -------------------------------------------------------------- #
     #  Plotting                                                        #

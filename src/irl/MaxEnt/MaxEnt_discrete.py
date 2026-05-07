@@ -11,7 +11,7 @@ from irl.utils.tools import compute_dtw
 from tqdm import tqdm
 
 # Normalization divisors matching the 7 obs keys:
-# timestep(96), soc(1), soc_target(1), energy_price(0.47),
+# timestep(96), soc(1), soc_gap(1), energy_price(0.47),
 # battery_capacity(2), time_to_next_journey(96), current_charger_power(22)
 DISCRETE_OBS_SCALES = [96, 1, 1, 0.47, 2, 96, 22]
 
@@ -33,7 +33,7 @@ class FlattenNormalizeObsWrapper(gym.ObservationWrapper):
         raw = np.concatenate([
             np.asarray(obs['timestep']).flatten(),
             np.asarray(obs['soc']).flatten(),
-            np.asarray(obs['soc_target']).flatten(),
+            np.asarray(obs['soc_gap']).flatten(),
             np.asarray(obs['energy_price']).flatten(),
             np.asarray(obs['battery_capacity']).flatten(),
             np.asarray(obs['time_to_next_journey']).flatten(),

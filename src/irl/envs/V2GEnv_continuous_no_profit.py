@@ -42,6 +42,7 @@ class V2GEnv(gym.Env):
         self.timestep = 0                   # 0 - 95
         self.soc = 0                        # 0.0 - 1.0
         self.soc_target = 0                 # 0.0 - 1.0
+        self.soc_gap = 0                    # soc - soc_target
         self.location = 0                   # 0: home, 1: work
         self.time_to_next_journey = 0       # 0 - 95
 
@@ -100,7 +101,7 @@ class V2GEnv(gym.Env):
         self.observation_space = spaces.Dict({
             'timestep': spaces.Box(low=0, high=96, shape=(1,), dtype=np.int64),                                                # 15-minute intervals in a day
             'soc': spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),             # State of Charge
-            'soc_target': spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),      # Target State of Charge
+            'soc_gap': spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),      # SoC gap (soc - soc_target)
             #'energy_price': spaces.Box(low=0.0, high=0.47, shape=(1,), dtype=np.float32),   # Energy price in pounds
             'battery_capacity': spaces.Box(low=0, high=2, shape=(1,), dtype=np.int64),                                         # Battery capacity in kWh (40 / 60 / 80 kWh)
             'time_to_next_journey': spaces.Box(low=0, high=96, shape=(1,), dtype=np.int64),                                    # Time to next journey start in timesteps
@@ -196,7 +197,7 @@ class V2GEnv(gym.Env):
         return {
             'timestep': np.array([self.timestep], dtype=np.int64),
             'soc': np.array([self.soc], dtype=np.float32),
-            'soc_target': np.array([self.soc_target], dtype=np.float32),
+            'soc_gap': np.array([self.soc - self.soc_target], dtype=np.float32),
             #'energy_price': np.array([self.energy_price_profile[self.timestep]], dtype=np.float32),
             'battery_capacity': np.array([self.battery_capacity], dtype=np.int64),
             'time_to_next_journey': np.array([self.time_to_next_journey], dtype=np.int64),
@@ -318,6 +319,7 @@ class V2GEnv(gym.Env):
 
         self.location = 0                                                               # Start at home
         self.soc_target = self.energy_for_out + 0.2 # Target SoC to cover outgoing journey
+        self.soc_gap = self.soc - self.soc_target
         self.energy_price = self.energy_price_profile[self.timestep]
         self.time_to_next_journey = self.out_start_timestep
 
@@ -490,6 +492,7 @@ class V2GEnv(gym.Env):
         else:
             self.time_to_next_journey = max(0, self.time_to_next_journey - (charging_time if action != 0.0 else 1))
 
+        self.soc_gap = self.soc - self.soc_target
         # --- UPDATE FEATURE HISTORY ---
         self.__update_feature_history(features)
 

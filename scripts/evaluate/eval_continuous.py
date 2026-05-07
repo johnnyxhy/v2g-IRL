@@ -7,8 +7,8 @@ from irl.utils.tools import compute_dtw
 import json
 
 gym.register(
-    id='V2GEnv-profit',
-    entry_point="irl.envs.V2GEnv_profit:V2GEnv",
+    id='V2GEnv-continuous',
+    entry_point="irl.envs.V2GEnv_continuous:V2GEnv",
     max_episode_steps=96,
 )
 
@@ -200,7 +200,7 @@ def evaluate(vec_env, model, expert_data, expert_index, n_rollouts=10, determini
 
 if __name__ == "__main__":
     # --- Configuration ---
-    model_path = "./models/MaxEnt/continuous/MaxEntIRL_profit_v7_exp2/maxent_irl_epoch50"
+    model_path = "./models/MaxEnt/continuous/MaxEntIRL_continuous_male5059/maxent_irl_epoch50"
     expert_data_path = "data/processed_trajectories_profit.json"
     segment = "Male 50-59"
     n_rollouts = 20
@@ -216,7 +216,7 @@ if __name__ == "__main__":
     # Load trained model
     model = SAC.load(model_path)
 
-    vec_env = DummyVecEnv([lambda: gym.make('V2GEnv-profit')])
+    vec_env = DummyVecEnv([lambda: gym.make('V2GEnv-continuous')])
 
     expert_indexes = find_expert_indexes(expert_data, segment)
     n_eval = max(1, int(len(expert_indexes) * eval_ratio))

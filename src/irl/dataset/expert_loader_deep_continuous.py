@@ -57,14 +57,14 @@ def load_trajectories(input_file, output_file=None):
 
     # 5. Convert Energy to SoC
     df['SoC_end'] = df['Battery_Energy_Level_kWh'] / df['Battery_Capacity_kWh']
-    df['SoC_target'] = np.where(df['Upcoming_Trip_Energy_kWh'].isna(), 0.0, df['Upcoming_Trip_Energy_kWh'] / df['Battery_Capacity_kWh'])
+    df['SoC_target'] = np.where(df['Upcoming_Trip_Energy_kWh'].isna(), 0.0, df['Upcoming_Trip_Energy_kWh'] / df['Battery_Capacity_kWh'])+0.2
     
 
     # 6. SoC at start of timestep
     df['SoC'] = df.groupby('EpisodeID')['SoC_end'].shift(1)
     first_timesteps = df['Timestep'] == 0
     df.loc[first_timesteps, 'SoC'] = df.loc[first_timesteps, 'Initial_Energy_kWh'] / df.loc[first_timesteps, 'Battery_Capacity_kWh']
-
+    df['SoC_gap'] = df['SoC'] - df['SoC_target']
     # 7. Charge/discharge amounts as SoC fractions
     df['amount_charged'] = (df['Total_Charge_kWh'] / df['Battery_Capacity_kWh']).fillna(0.0)
     df['amount_discharged'] = (df['Total_Discharge_kWh'] / df['Battery_Capacity_kWh']).fillna(0.0)
@@ -134,6 +134,7 @@ def load_trajectories(input_file, output_file=None):
         episode_data['discharge_cost_penalty'] = 10.0 * episode_data['amount_discharged'] ** 2 * ((max_price - action_mean_price) / max_price)
 
         action_dt = grp['Timestep'].transform('count')
+        episode_data['action_dt'] = action_dt
         episode_data['battery_needed_target'] = episode_data['battery_needed_target'] * action_dt
         episode_data['battery_exceeded_target'] = episode_data['battery_exceeded_target'] * action_dt
 
@@ -154,7 +155,7 @@ def load_trajectories(input_file, output_file=None):
         actions = []
 
         for _, row in action_start_rows.iterrows():
-            # Observation: [timestep, soc, soc_target, energy_price, battery_cap_index, time_to_next_journey, charger_power_kW]
+            # Observation: [timestep, soc, soc_gap, energy_price, battery_cap_index, time_to_next_journey, charger_power_kW]
             if row['Location'] == 'home':
                 charger_power = row['Home_Charger_kW']
             else:
@@ -163,7 +164,7 @@ def load_trajectories(input_file, output_file=None):
             obs = [
                 float(row['Timestep']),
                 float(row['SoC']),
-                float(row['SoC_target']),
+                float(row['SoC_gap']),
                 float(row['Energy_Price_Pounds']),
                 float(row['battery_cap_index']),
                 float(row['timesteps_to_next_journey']),
@@ -182,6 +183,8 @@ def load_trajectories(input_file, output_file=None):
                 action_val = 0.0
             actions.append([action_val])
 
+        delta_ts = action_start_rows['action_dt'].tolist()
+
         episodes.append({
             'episodeID': int(episode_id),
             'segment': episode_data['Segment'].iloc[0],
@@ -191,6 +194,7 @@ def load_trajectories(input_file, output_file=None):
             'state_action_pairs': {
                 'observations': observations,
                 'actions': actions,
+                'delta_ts': delta_ts,
             },
         })
 

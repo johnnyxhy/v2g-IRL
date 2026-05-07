@@ -181,22 +181,22 @@ if __name__ == "__main__":
     #  Configuration                                                       #
     # ------------------------------------------------------------------ #
     # Linear MaxEnt model
-    maxent_experiment    = "MaxEnt/discrete/MaxEntIRL_discrete_profit_exp1"
+    maxent_experiment    = "MaxEnt/discrete/MaxEntIRL_discrete_pricediff_male5059_charge"
     maxent_epoch         = 20
-    maxent_data_path     = "data/processed_trajectories_discrete_profit.json"
+    maxent_data_path     = "data/processed_trajectories_discrete_pricediff.json"
 
     # Deep MaxEnt model
-    deep_experiment      = "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_profit_exp1"
+    deep_experiment      = "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_pricediff_male5059"
     deep_epoch           = 20
     deep_hidden_dim      = 32
-    deep_data_path       = "data/processed_trajectories_deep_discrete_profit.json"
+    deep_data_path       = "data/processed_trajectories_deep_discrete_pricediff.json"
 
     # AIRL model
-    airl_experiment      = "Adversarial/discrete/Adversarial_discrete_exp5"
+    airl_experiment      = "Adversarial/discrete/Adversarial_discrete_male5059"
     airl_epoch           = 20
     airl_reward_hidden   = 32
     airl_shaping_hidden  = 32
-    airl_data_path       = "data/processed_trajectories_airl_discrete.json"
+    airl_data_path       = "data/processed_trajectories_airl_discrete_pricediff.json"
 
     segment              = "Male 50-59"
     n_rollouts           = 20

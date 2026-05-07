@@ -98,12 +98,13 @@ def load_trajectories(input_file, output_file=None):
     )
 
     df['SoC_end'] = df['Battery_Energy_Level_kWh'] / df['Battery_Capacity_kWh']
-    df['SoC_target'] = np.where(df['Upcoming_Trip_Energy_kWh'].isna(), 0.0, df['Upcoming_Trip_Energy_kWh'] / df['Battery_Capacity_kWh'])
+    df['SoC_target'] = np.where(df['Upcoming_Trip_Energy_kWh'].isna(), 0.0, df['Upcoming_Trip_Energy_kWh'] / df['Battery_Capacity_kWh']) + 0.2
     df['SoC'] = df.groupby('EpisodeID')['SoC_end'].shift(1)
     first_timesteps = df['Timestep'] == 0
     df.loc[first_timesteps, 'SoC'] = (
         df.loc[first_timesteps, 'Initial_Energy_kWh'] / df.loc[first_timesteps, 'Battery_Capacity_kWh']
     )
+    df['SoC_gap'] = df['SoC'] - df['SoC_target']
 
     df['amount_charged'] = (df['Total_Charge_kWh'] / df['Battery_Capacity_kWh']).fillna(0.0)
     df['amount_discharged'] = (df['Total_Discharge_kWh'] / df['Battery_Capacity_kWh']).fillna(0.0)
@@ -208,7 +209,7 @@ def load_trajectories(input_file, output_file=None):
             obs = [
                 float(row['Timestep']),
                 float(row['SoC']),
-                float(row['SoC_target']),
+                float(row['SoC_gap']),
                 float(row['Energy_Price_Pounds']),
                 float(row['battery_cap_index']),
                 float(row['timesteps_to_next_journey']),
@@ -269,6 +270,6 @@ def load_trajectories(input_file, output_file=None):
 
 if __name__ == "__main__":
     episodes = load_trajectories(
-        "data/EVDataset_discrete_profit.csv",
-        output_file="data/processed_trajectories_airl_discrete.json"
+        "data/EVDataset_discrete_pricediff.csv",
+        output_file="data/processed_trajectories_airl_discrete_pricediff.json"
     )
