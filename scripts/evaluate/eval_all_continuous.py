@@ -24,15 +24,47 @@ from irl.utils.tools import compute_dtw
 import torch
 import json
 
+# ── Plot style ────────────────────────────────────────────────────────────────
+AGENT_COLOR  = "#0000FF"
+EXPERT_COLOR = "#000000"
+RANGE_COLOR  = "tab:blue"
+PRICE_COLOR  = "#228B22"
+LINEAR_COLOR = "#1f77b4"
+DEEP_COLOR   = "#ff7f0e"
+AIRL_COLOR   = "#d62728"
+GRID_COLOR   = "#E0E0E0"
+SPINE_COLOR  = "#000000"
+FIG_SIZE     = (6, 4)
+
+plt.rcParams.update({
+    "font.size":          10,
+    "axes.titlesize":     9,
+    "axes.titleweight":   "regular",
+    "axes.labelsize":     9,
+    "axes.spines.top":    True,
+    "axes.spines.right":  True,
+    "axes.edgecolor":     SPINE_COLOR,
+    "axes.linewidth":     0.8,
+    "xtick.labelsize":    9,
+    "ytick.labelsize":    9,
+    "xtick.direction":    "out",
+    "ytick.direction":    "out",
+    "legend.fontsize":    8,
+    "legend.framealpha":  0.9,
+    "legend.edgecolor":   SPINE_COLOR,
+    "figure.dpi":         150,
+})
+# ─────────────────────────────────────────────────────────────────────────────
+
 # --- Register environments ---
 gym.register(
     id='V2GEnv-profit',
-    entry_point="irl.envs.V2GEnv_profit:V2GEnv",
+    entry_point="irl.envs.V2GEnv_continuous:V2GEnv",
     max_episode_steps=96,
 )
 gym.register(
     id='V2GDeepEnv-profit',
-    entry_point="irl.envs.V2GDeepEnv_profit:V2GDeepEnv",
+    entry_point="irl.envs.V2GDeepEnv_continuous:V2GDeepEnv",
     max_episode_steps=96,
 )
 
@@ -152,34 +184,46 @@ def plot_comparison(
     deep_mae,
     airl_mae,
 ):
-    plt.figure(figsize=(12, 5))
-
-    # Journey shading
-    plt.axvspan(out_start, out_start + out_dur, color='red', alpha=0.15, label='Out Journey')
-    plt.axvspan(return_start, return_start + return_dur, color='blue', alpha=0.15, label='Return Journey')
-
-    # SoC curves
-    plt.plot(range(len(expert_soc)), expert_soc,
-             label='Expert SoC', color='black', linestyle='--', linewidth=1.5)
-    plt.plot(range(len(maxent_soc)), maxent_soc,
-             label=f'Linear MaxEnt (MAE={maxent_mae:.4f})', color='tab:blue', linewidth=1.5)
-    plt.plot(range(len(deep_soc)), deep_soc,
-             label=f'Deep MaxEnt (MAE={deep_mae:.4f})', color='tab:orange', linewidth=1.5)
-    plt.plot(range(len(airl_soc)), airl_soc,
-             label=f'AIRL (MAE={airl_mae:.4f})', color='tab:red', linewidth=1.5)
-
-    # Energy price (secondary reference)
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    ax.axvspan(
+        out_start, out_start + out_dur,
+        color='#FF4444', alpha=0.15, label='Outbound Journey',
+    )
+    ax.axvspan(
+        return_start, return_start + return_dur,
+        color='#4444FF', alpha=0.15, label='Return Journey',
+    )
+    ax.plot(
+        range(len(expert_soc)), expert_soc,
+        label='Expert SoC', color=EXPERT_COLOR, linestyle='--', linewidth=1.8,
+    )
+    ax.plot(
+        range(len(maxent_soc)), maxent_soc,
+        label=f'Linear MaxEnt (MAE={maxent_mae:.4f})', color=LINEAR_COLOR, linewidth=1.8,
+    )
+    ax.plot(
+        range(len(deep_soc)), deep_soc,
+        label=f'Deep MaxEnt (MAE={deep_mae:.4f})', color=DEEP_COLOR, linewidth=1.8,
+    )
+    ax.plot(
+        range(len(airl_soc)), airl_soc,
+        label=f'AIRL (MAE={airl_mae:.4f})', color=AIRL_COLOR, linewidth=1.8,
+    )
     n = max(len(maxent_soc), len(deep_soc), len(airl_soc), len(expert_soc))
     price = energy_price_profile[:n]
-    plt.plot(range(len(price)), price, color='green', alpha=0.5, linewidth=1.0, label='Energy Price')
-
-    plt.xlabel('Timestep')
-    plt.ylabel('State of Charge (SoC)')
-    plt.title(
-        f'MaxEnt vs Deep MaxEnt vs AIRL \u2014 Trajectory {expert_index} '
-        f'(Linear MAE={maxent_mae:.4f}, Deep MAE={deep_mae:.4f}, AIRL MAE={airl_mae:.4f})'
+    ax.plot(
+        range(len(price)), price,
+        color=PRICE_COLOR, linewidth=1.2, linestyle=':', label='Energy Price',
     )
-    plt.legend()
+    ax.set_xlabel('Timestep')
+    ax.set_ylabel('State of Charge (SoC)')
+    ax.grid(True, color=GRID_COLOR, linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.legend()
+    ax.set_title(
+        f'Continuous Comparison — Traj {expert_index} | '
+        f'Linear={maxent_mae:.4f}, Deep={deep_mae:.4f}, AIRL={airl_mae:.4f}'
+    )
     plt.tight_layout()
     plt.show()
 
@@ -189,26 +233,27 @@ if __name__ == "__main__":
     #  Configuration                                                       #
     # ------------------------------------------------------------------ #
     # Linear MaxEnt model
-    maxent_model_path    = "./models/MaxEnt/continuous/MaxEntIRL_profit_v7_exp2/maxent_irl_epoch30"
+    maxent_model_path    = "./models/MaxEnt/continuous/MaxEntIRL_continuous_male5059_new/maxent_irl_epoch30"
     maxent_data_path     = "data/processed_trajectories_profit.json"
 
     # Deep MaxEnt model
-    deep_experiment      = "DeepMaxEnt/continuous/Deep_profit_sum_0.01reg_50charge_5.0gradclip_continued"
-    deep_epoch           = 20
+    deep_experiment      = "DeepMaxEnt/continuous/DeepMaxEntIRL_continuous_male5059_new"
+    deep_epoch           = 30
     deep_hidden_dim      = 32
     deep_data_path       = "data/processed_trajectories_deep_profit.json"
 
     # AIRL model
-    airl_experiment      = "Adversarial/continuous/Adversarial_continuous_exp1"
+    airl_experiment      = "Adversarial/continuous/AIRL_continuous_male5059_new"
     airl_epoch           = 30
     airl_reward_hidden   = 32
     airl_shaping_hidden  = 32
     airl_data_path       = "data/processed_trajectories_airl_continuous.json"
 
     segment              = "Male 50-59"
-    n_rollouts           = 20
-    n_figures            = 5    # how many comparison plots to show
+    n_rollouts           = 30
+    n_figures            = 10   # how many test trajectories to plot (last n)
     eval_ratio           = 1.0  # fraction of segment trajectories to evaluate
+    plot_only            = True # if True, only evaluate the last n_figures trajectories
     deterministic_policy = False
     noise_scale          = 1.0  # 0.0 = deterministic, 1.0 = full stochastic
     # ------------------------------------------------------------------ #
@@ -258,8 +303,13 @@ if __name__ == "__main__":
     maxent_indexes = maxent_indexes[:n_eval]
     deep_indexes   = deep_indexes[:n_eval]
     airl_indexes   = airl_indexes[:n_eval]
+    
+    if plot_only:
+        maxent_indexes = maxent_indexes[-n_figures:]
+        deep_indexes   = deep_indexes[-n_figures:]
+        airl_indexes   = airl_indexes[-n_figures:]
 
-    print(f"Segment '{segment}': {n_common} trajectories available, evaluating {n_eval}")
+    print(f"Segment '{segment}': {n_common} trajectories available, evaluating {len(maxent_indexes)}")
 
     all_maxent_mae = []
     all_deep_mae   = []
@@ -330,7 +380,7 @@ if __name__ == "__main__":
             f"AIRL best MAE: {airl_mae:.4f}, best DTW: {airl_dtw:.3f}, IS: {airl_is:.3f}"
         )
 
-        if i < n_figures:
+        if plot_only or i >= len(maxent_indexes) - n_figures:
             plot_comparison(
                 expert_soc=expert_soc,
                 maxent_soc=maxent_soc,

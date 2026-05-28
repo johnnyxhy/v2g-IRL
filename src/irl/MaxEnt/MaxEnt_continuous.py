@@ -2,125 +2,126 @@ import numpy as np
 import gymnasium as gym
 from sbx import SAC
 import matplotlib.pyplot as plt
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+import os
+from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.monitor import Monitor
 from irl.dataset.expert_dataset import ExpertDataset
-from irl.utils.tools import compute_dtw
+from irl.utils.tools import compute_dtw, compute_mae
 from irl.utils.variable_dt_buffer import VariableDtReplayBuffer
 from tqdm import tqdm
-import math
 import jax.numpy as jnp
 
+from irl.MaxEnt.MaxEnt import (
+    MaxEntIRLTrainerBase,
+    logsumexp_feat_exp, compute_log_likelihood,
+    clip_gradient, linear_lr, append_metrics_csv,
+)
+
+
+# ------------------------------------------------------------------ #
+#  Configuration                                                     #
+# ------------------------------------------------------------------ #
 
 class MaxEntConfig:
-    """
-    Configuration class for MaxEnt IRL
-    """
-    device: str = 'cuda'
+    """Configuration class for MaxEnt IRL (continuous env)."""
+
+    device: str = 'cpu'
+
+    # IRL outer loop
     n_epochs: int = 10
     reward_lr: float = 0.01
-    reward_lr_end: float = 0.0     # Final reward LR for linear decay (0 = decay to zero)
+    reward_lr_end: float = 0.0        # Final reward LR for linear decay (0 = decay to zero)
     rollout_samples: int = 20
+    grad_clip_norm: float = 5.0       # Max gradient norm for clipping (None to disable)
+
+    # SAC inner loop (SBX)
     policy_train_steps_per_iter: int = 5_000
     policy_train_lr: float = 3e-4
     policy_gamma: float = 0.99
     policy_batch_size: int = 64
-    train_ratio: float = 0.8
+
+    # Data
+    train_ratio: float = 0.8    
     segment: str = None
+
+    # Saving
     folder_name: str = "MaxEntIRL_continuous"
     validation: bool = False
-    grad_clip_norm: float = 5.0  # Max gradient norm for clipping (None to disable)
 
-class MaxEntIRLTrainer_Continuous:
+
+
+# ------------------------------------------------------------------ #
+#  Trainer                                                           #
+# ------------------------------------------------------------------ #
+
+class MaxEntIRLTrainer_Continuous(MaxEntIRLTrainerBase):
     """
-    Docstring for MaxEntContinuous
+    MaxEnt IRL with SAC as the inner-loop policy optimizer for the
+    continuous V2GEnv_continuous environment.
+
+    The reward is linear in hand-crafted features:
+        R(s, a) = w · φ(s, a)
+
+    The IRL gradient is:
+        ∇w = (1/N) Σ_i [ φ_expert^(i) − Σ_j softmax(R(τ_j)) · φ(τ_j) ]
     """
 
-    def __init__(self, 
+    def __init__(self,
                  initial_reward_weights: np.ndarray,
                  expert_trajectories: ExpertDataset,
                  env_name: str,
-                 cfg: MaxEntConfig, 
-                 ):
-        self.cfg = cfg
-        self.env_name = env_name
-        self.expert_trajectories = expert_trajectories
-        self.train_set, self.val_set = expert_trajectories.split_dataset(cfg.train_ratio, cfg.segment)
-        
-        self.reward_weights = initial_reward_weights
+                 cfg: MaxEntConfig):
+        super().__init__(initial_reward_weights, expert_trajectories, env_name, cfg)
+        print(f"MaxEnt IRL Trainer initialized with {len(self.train_set)} training, "
+              f"{len(self.val_set)} validation, {len(self.test_set)} test samples.")
 
-        # For tracking
-        self.train_l2_loss = []
-        self.train_dtw_distance = []
-        self.train_mae = []
-        self.val_l2_loss = []
-        self.val_dtw_distance = []
-        self.val_mae = []
-        self.train_log_likelihood = []
-        self.reward_weights_history = []
-
-        print(f"MaxEnt IRL Trainer initialized with {len(self.train_set)} training samples and {len(self.val_set)} validation samples.")
-
+    # -------------------------------------------------------------- #
+    #  Main training loop                                            #
+    # -------------------------------------------------------------- #
 
     def train(self):
-        """
-        Train the MaxEnt IRL model
-        """
+        """Train the MaxEnt IRL model."""
+        cfg = self.cfg
 
         # Create training environment
         env = gym.make(self.env_name)
-        env = Monitor(env, filename=f"./models/{self.cfg.folder_name}/monitor.csv")
+        env = Monitor(env, filename=f"./models/{cfg.folder_name}/monitor.csv")
         vec_env = DummyVecEnv([lambda: env])
 
-        # Normalise rewards for training
-        #vec_env = VecNormalize(vec_env, norm_obs=False, norm_reward=True, clip_obs=10.0, clip_reward=10.0)
-
-        # create rollout env 
-        rollout_env = gym.make(self.env_name)
-        rollout_env = DummyVecEnv([lambda: rollout_env])
-
-        # Add Monitor
+        # Create rollout env
+        rollout_base = gym.make(self.env_name)
+        rollout_env = DummyVecEnv([lambda: rollout_base])
 
         model = SAC(
             policy="MultiInputPolicy",
             env=vec_env,
             verbose=0,
-            learning_rate=self.cfg.policy_train_lr,
-            gamma=self.cfg.policy_gamma,
-            device=self.cfg.device,
-            batch_size=self.cfg.policy_batch_size,
-            tensorboard_log=f"./models/{self.cfg.folder_name}/tensorboard/",
+            learning_rate=cfg.policy_train_lr,
+            gamma=cfg.policy_gamma,
+            device=cfg.device,
+            batch_size=cfg.policy_batch_size,
+            tensorboard_log=f"./models/{cfg.folder_name}/tensorboard/",
 
             # --- Custom Buffer ---
-            replay_buffer_class=VariableDtReplayBuffer,       
-            replay_buffer_kwargs={
-                'base_gamma': self.cfg.policy_gamma         
-            },
-            
+            replay_buffer_class=VariableDtReplayBuffer,
+            replay_buffer_kwargs={'base_gamma': cfg.policy_gamma},
+
             # --- SAC Specific Parameters ---
-            buffer_size=100_000,  # Size of the replay buffer
-            learning_starts=1_000,    # Steps to collect random data before learning starts
-            ent_coef='auto',         # Learned entropy coefficient, reset each epoch
-            train_freq=1,           # Update the model every n step
-            gradient_steps=1,       # How many gradient updates to do per n step
+            buffer_size=100_000,
+            learning_starts=1_000,
+            ent_coef='auto',          # Learned entropy coefficient, reset each epoch
+            train_freq=1,
+            gradient_steps=1,
         )
 
-        for epoch in range(self.cfg.n_epochs):
+        for epoch in range(cfg.n_epochs):
+            print(f"Epoch {epoch+1}/{cfg.n_epochs}: Starting training iteration...")
 
-            print(f"Epoch {epoch+1}/{self.cfg.n_epochs}: Starting training iteration...")
-            
             # --- LOGGING ----
-
-            # Track average expert feature and trajectory feature expectations
             avg_expert_feat_exp = np.zeros_like(self.reward_weights)
             avg_traj_feat_exp = np.zeros_like(self.reward_weights)
-
-            # Track average episode length
             avg_episode_length = 0.0
-
-            # Track training average DTW distance
             avg_dtw_distance = 0.0
-            avg_mae = 0.0
             avg_mae = 0.0
 
             # --- TRAINING ----
@@ -130,8 +131,6 @@ class MaxEntIRLTrainer_Continuous:
             vec_env.envs[0].unwrapped.set_initial_states(None)
 
             # Reset learned entropy coefficient so auto-tuning restarts fresh each epoch
-            # Initial ent_coef = 0.01  =>  log(0.01) ≈ -4.6052
-            # Lower value reduces entropy bonus so policy can learn sharper action preferences
             if hasattr(model, 'ent_coef_state'):
                 model.ent_coef_state = model.ent_coef_state.replace(
                     params={'log_ent_coef': jnp.array(-4.6052)}
@@ -139,36 +138,35 @@ class MaxEntIRLTrainer_Continuous:
 
             # Clear replay buffer so SAC only trains on rewards from current weights
             model.replay_buffer.reset()
+            model.learn(
+                total_timesteps=cfg.policy_train_steps_per_iter,
+                tb_log_name=f"epoch_{epoch+1}",
+                progress_bar=True,
+                reset_num_timesteps=False,
+                log_interval=500,
+            )
 
-            model.learn(total_timesteps=self.cfg.policy_train_steps_per_iter, tb_log_name=f"epoch_{epoch+1}", progress_bar=True, reset_num_timesteps=False, log_interval=500)
-
-            # Loop through each expert trajectory 
+            # Loop through each expert trajectory
             grad = np.zeros_like(self.reward_weights)
             average_l2_loss = 0.0
             avg_log_likelihood = 0.0
             N = len(self.train_set)
 
             for traj in tqdm(self.train_set, desc="Processing Expert Trajectories"):
-                # Compute feature expectations from expert trajectory
                 expert_feat_exp = np.array(traj.feature_expectation, dtype=np.float32)
-                traj_feat_exp = np.zeros_like(self.reward_weights)
-
-                n_samples = self.cfg.rollout_samples
                 n_features = expert_feat_exp.shape[0]
 
-                traj_feat_exp_arr =  np.zeros((n_samples, n_features), dtype=np.float32)
-                rewards_arr = np.zeros(n_samples, dtype=np.float32)
+                traj_feat_exp_arr = np.zeros((cfg.rollout_samples, n_features), dtype=np.float32)
+                rewards_arr = np.zeros(cfg.rollout_samples, dtype=np.float32)
 
                 # Perform rollouts with current policy and expert initial states
-                for i in range(self.cfg.rollout_samples):
+                for i in range(cfg.rollout_samples):
                     rollout_env.envs[0].unwrapped.set_initial_states(traj.initial_values)
                     rollout_env.envs[0].unwrapped.set_reward_weights(self.reward_weights)
                     obs = rollout_env.reset()
-
                     done = False
                     traj_reward = 0.0
                     episode_length = 0
-
                     while not done:
                         action, _ = model.predict(obs, deterministic=False)
                         obs, reward, dones, infos = rollout_env.step(action)
@@ -178,32 +176,23 @@ class MaxEntIRLTrainer_Continuous:
 
                     traj_feat_exp_arr[i] = np.array(infos[0]['feature_expectation'], dtype=np.float32)
                     rewards_arr[i] = traj_reward
-
-                    avg_episode_length += (episode_length) / (N * self.cfg.rollout_samples)
+                    avg_episode_length += episode_length / (N * cfg.rollout_samples)
 
                     # Compute DTW / MAE distance for monitoring
                     expert_soc = np.array(traj.soc_history, dtype=np.float32)
                     agent_soc = np.array(infos[0]['soc_history'], dtype=np.float32)
-                    dtw_distance = compute_dtw(expert_soc, agent_soc)
-                    avg_dtw_distance += dtw_distance / (N * self.cfg.rollout_samples)
-                    avg_mae += self._compute_mae(expert_soc, agent_soc) / (N * self.cfg.rollout_samples)
-                    avg_mae += self._compute_mae(expert_soc, agent_soc) / (N * self.cfg.rollout_samples)
-                
-                # Use LogSumExp to compute expected feature expectations
-                max_reward = np.max(rewards_arr)
-                exp_weights = np.exp(rewards_arr - max_reward)
-                weights = exp_weights / np.sum(exp_weights)
+                    avg_dtw_distance += compute_dtw(expert_soc, agent_soc) / (N * cfg.rollout_samples)
+                    avg_mae += compute_mae(expert_soc, agent_soc) / (N * cfg.rollout_samples)
 
-                traj_feat_exp = np.dot(weights, traj_feat_exp_arr)
+                # Use LogSumExp to compute importance-weighted feature expectations
+                traj_feat_exp = logsumexp_feat_exp(rewards_arr, traj_feat_exp_arr)
 
                 # Log-likelihood: R(τ_expert) - log Z, where Z is estimated from rollouts only.
                 # Can be positive when expert reward exceeds all rollout rewards.
-                r_expert_step = float(np.dot(self.reward_weights, expert_feat_exp))
-                r_rollouts_step = np.array([float(np.dot(self.reward_weights, traj_feat_exp_arr[i]))
-                                            for i in range(self.cfg.rollout_samples)])
-                log_Z = np.max(r_rollouts_step) + np.log(np.sum(np.exp(r_rollouts_step - np.max(r_rollouts_step))))
-                avg_log_likelihood += (r_expert_step - log_Z) / N
-                
+                avg_log_likelihood += compute_log_likelihood(
+                    self.reward_weights, expert_feat_exp, traj_feat_exp_arr
+                ) / N
+
                 # Update gradient
                 grad += (expert_feat_exp - traj_feat_exp) / N
 
@@ -212,52 +201,24 @@ class MaxEntIRLTrainer_Continuous:
                 avg_traj_feat_exp += traj_feat_exp / N
 
                 # Calculate L2 loss for monitoring
-                l2_loss = np.linalg.norm(expert_feat_exp - traj_feat_exp)
-                average_l2_loss += l2_loss / N  
-            
+                average_l2_loss += np.linalg.norm(expert_feat_exp - traj_feat_exp) / N
+
             # Update reward weights
-
-            # Gradient clipping
-            grad_norm = np.linalg.norm(grad)
-            if self.cfg.grad_clip_norm is not None and grad_norm > self.cfg.grad_clip_norm:
-                grad = grad * (self.cfg.grad_clip_norm / grad_norm)
-
-            print(f"Gradient before update: {grad} (norm: {grad_norm:.4f}, clipped: {grad_norm > (self.cfg.grad_clip_norm or np.inf)})")
+            grad, grad_norm = clip_gradient(grad, cfg.grad_clip_norm)
+            print(f"Gradient before update: {grad} (norm: {grad_norm:.4f}, clipped: {grad_norm > (cfg.grad_clip_norm or np.inf)})")
 
             # Linear LR decay: lr(t) = lr_start + (lr_end - lr_start) * (epoch / (n_epochs - 1))
-            if self.cfg.n_epochs > 1:
-                current_lr = self.cfg.reward_lr + (self.cfg.reward_lr_end - self.cfg.reward_lr) * (epoch / (self.cfg.n_epochs - 1))
-            else:
-                current_lr = self.cfg.reward_lr
-
-            # Perform gradient ascent
+            current_lr = linear_lr(cfg.reward_lr, cfg.reward_lr_end, epoch, cfg.n_epochs)
             self.reward_weights = self.reward_weights + current_lr * grad
+            self.reward_weights_history.append(self.reward_weights.copy())
             print(f"Reward LR: {current_lr:.6f}")
 
             # --- VALIDATION ----
-
-            # Perform validation (optional)
-            if self.cfg.validation and len(self.val_set) > 0:
-
+            val_loss = val_dtw_distance = val_mae = 0.0
+            if cfg.validation and len(self.val_set) > 0:
                 print("Starting validation...")
-
-                val_loss = 0.0
-                val_dtw_distance = 0.0
-                val_mae = 0.0
                 M = len(self.val_set)
-
                 for traj in tqdm(self.val_set, desc="Validating Expert Trajectories"):
-                    # Compute feature expectations from expert trajectory
-                    expert_feat_exp = np.array(traj.feature_expectation, dtype=np.float32)
-                    traj_feat_exp = np.zeros_like(self.reward_weights)
-
-                    n_samples = self.cfg.rollout_samples
-                    n_features = expert_feat_exp.shape[0]
-
-                    traj_feat_exp_arr =  np.zeros((n_samples, n_features), dtype=np.float32)
-                    rewards_arr = np.zeros(n_samples, dtype=np.float32)
-
-                    # Perform single deterministic rollout with current policy and expert initial states
                     rollout_env.envs[0].unwrapped.set_initial_states(traj.initial_values)
                     obs = rollout_env.reset()
                     done = False
@@ -266,144 +227,92 @@ class MaxEntIRLTrainer_Continuous:
                         obs, reward, dones, infos = rollout_env.step(action)
                         done = bool(dones[0])
                     traj_feat_exp = np.array(infos[0]['feature_expectation'], dtype=np.float32)
-
-                    # Calculate L2 loss for monitoring
-                    l2_loss = np.linalg.norm(expert_feat_exp - traj_feat_exp)
-                    val_loss += l2_loss / M
-
-                    # Compute DTW distance for monitoring
+                    expert_feat_exp = np.array(traj.feature_expectation, dtype=np.float32)
+                    val_loss += np.linalg.norm(expert_feat_exp - traj_feat_exp) / M
                     expert_soc = np.array(traj.soc_history, dtype=np.float32)
                     agent_soc = np.array(infos[0]['soc_history'], dtype=np.float32)
-                    dtw_distance = compute_dtw(expert_soc, agent_soc)
-                    val_dtw_distance += dtw_distance / M
-                    val_mae += self._compute_mae(expert_soc, agent_soc) / M
-                    val_mae += self._compute_mae(expert_soc, agent_soc) / M
-        
-            # --- LOGGING ----
+                    val_dtw_distance += compute_dtw(expert_soc, agent_soc) / M
+                    val_mae += compute_mae(expert_soc, agent_soc) / M
 
-            # Log average L2 loss
+            # --- LOGGING ----
             self.train_l2_loss.append(average_l2_loss)
             self.train_dtw_distance.append(avg_dtw_distance)
             self.train_mae.append(avg_mae)
             self.train_log_likelihood.append(avg_log_likelihood)
-            if self.cfg.validation and len(self.val_set) > 0:
+            has_val = cfg.validation and len(self.val_set) > 0
+            if has_val:
                 self.val_l2_loss.append(val_loss)
                 self.val_dtw_distance.append(val_dtw_distance)
                 self.val_mae.append(val_mae)
 
-            self.reward_weights_history.append(self.reward_weights.copy())
-
-            print(f"--- Epoch {epoch+1}/{self.cfg.n_epochs} Summary ---")
-            print(f"Avg L2 Loss: {average_l2_loss:.4f}, Avg DTW Distance: {avg_dtw_distance:.4f}, Avg MAE: {avg_mae:.4f}, Log-Likelihood: {avg_log_likelihood:.4f}")
+            print(f"--- Epoch {epoch+1}/{cfg.n_epochs} Summary ---")
+            print(f"Avg L2 Loss: {average_l2_loss:.4f}, Avg DTW Distance: {avg_dtw_distance:.4f}, "
+                  f"Avg MAE: {avg_mae:.4f}, Log-Likelihood: {avg_log_likelihood:.4f}")
             print(f"Avg Expert Feature Expectation: {avg_expert_feat_exp}")
             print(f"Avg Traj   Feature Expectation: {avg_traj_feat_exp}")
             print(f"Updated Reward Weights: {self.reward_weights}")
             print(f"Avg Episode Length: {avg_episode_length:.2f}")
-            if self.cfg.validation and len(self.val_set) > 0:
-                print(f"Validation Avg L2 Loss: {val_loss:.4f}, Validation Avg DTW Distance: {val_dtw_distance:.4f}, Validation Avg MAE: {val_mae:.4f}")
+            if has_val:
+                print(f"Validation Avg L2 Loss: {val_loss:.4f}, Validation Avg DTW Distance: {val_dtw_distance:.4f}, "
+                      f"Validation Avg MAE: {val_mae:.4f}")
 
-            # Save model checkpoint
-            model.save(f"./models/{self.cfg.folder_name}/maxent_irl_epoch{epoch+1}")
-        
-        self.__plot_results()
+            append_metrics_csv(
+                f"./models/{cfg.folder_name}/metrics.csv",
+                epoch + 1,
+                average_l2_loss, avg_dtw_distance, avg_mae, avg_log_likelihood,
+                val_loss, val_dtw_distance, val_mae,
+                current_lr, grad_norm, has_val,
+            )
+
+            model.save(f"./models/{cfg.folder_name}/maxent_irl_epoch{epoch+1}")
+
+        self._plot_results()
+
+        if self.test_set:
+            self._evaluate_test_set(rollout_env, model, n_rollouts=30)
 
         print("Training completed")
 
-    @staticmethod
-    def _compute_mae(soc_a: np.ndarray, soc_b: np.ndarray) -> float:
-        """MAE between two SoC trajectories, resampling to the longer length."""
-        n = max(len(soc_a), len(soc_b))
-        if len(soc_a) != n:
-            soc_a = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(soc_a)), soc_a)
-        if len(soc_b) != n:
-            soc_b = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(soc_b)), soc_b)
-        return float(np.mean(np.abs(soc_a - soc_b)))
+    # -------------------------------------------------------------- #
+    #  Plotting                                                      #
+    # -------------------------------------------------------------- #
 
-    def __plot_results(self):
-        """Plot training results and reward weights evolution"""
+    def _plot_results(self):
+        """Plot training results and reward weights evolution."""
+        cfg = self.cfg
+        epochs = range(1, cfg.n_epochs + 1)
 
-        # --- PLOTTING ---
         plt.figure(1)
-        plt.plot(range(1, self.cfg.n_epochs + 1), self.train_l2_loss)
-        if self.cfg.validation and len(self.val_set) > 0:
-            plt.plot(range(1, self.cfg.n_epochs + 1), self.val_l2_loss)
+        plt.plot(epochs, self.train_l2_loss)
+        if cfg.validation and len(self.val_set) > 0:
+            plt.plot(epochs, self.val_l2_loss)
             plt.legend(['Train L2 Loss', 'Validation L2 Loss'])
-
-        plt.title('MaxEnt IRL L2 Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Average L2 Loss')
-        plt.grid()
-        plt.savefig(f'./models/{self.cfg.folder_name}/maxent_irl_training_loss.png')
+        plt.title('MaxEnt IRL (Continuous) - L2 Loss')
+        plt.xlabel('Epoch'); plt.ylabel('Average L2 Loss'); plt.grid()
+        plt.savefig(f'./models/{cfg.folder_name}/maxent_irl_training_loss.png')
 
         plt.figure(2)
-        plt.plot(range(1, self.cfg.n_epochs + 1), self.train_mae)
-        if self.cfg.validation and len(self.val_set) > 0 and self.val_mae:
-            plt.plot(range(1, self.cfg.n_epochs + 1), self.val_mae)
+        plt.plot(epochs, self.train_mae)
+        if cfg.validation and len(self.val_set) > 0 and self.val_mae:
+            plt.plot(epochs, self.val_mae)
             plt.legend(['Train MAE', 'Validation MAE'])
-        plt.title('MaxEnt IRL — SoC MAE')
-        plt.xlabel('Epoch')
-        plt.ylabel('Average MAE')
-        plt.grid()
-        plt.savefig(f'./models/{self.cfg.folder_name}/maxent_irl_mae.png')
+        plt.title('MaxEnt IRL (Continuous) - SoC MAE')
+        plt.xlabel('Epoch'); plt.ylabel('Average MAE'); plt.grid()
+        plt.savefig(f'./models/{cfg.folder_name}/maxent_irl_mae.png')
 
         plt.figure(3)
-        plt.plot(range(1, self.cfg.n_epochs + 1), self.train_dtw_distance)
-        if self.cfg.validation and len(self.val_set) > 0:
-            plt.plot(range(1, self.cfg.n_epochs + 1), self.val_dtw_distance)
+        plt.plot(epochs, self.train_dtw_distance)
+        if cfg.validation and len(self.val_set) > 0:
+            plt.plot(epochs, self.val_dtw_distance)
             plt.legend(['Train DTW Distance', 'Validation DTW Distance'])
-        plt.title('MaxEnt IRL DTW Distance')
-        plt.xlabel('Epoch')
-        plt.ylabel('Average DTW Distance')
-        plt.grid()
-        plt.savefig(f'./models/{self.cfg.folder_name}/maxent_irl_training_dtw_distance.png')
+        plt.title('MaxEnt IRL (Continuous) - DTW Distance')
+        plt.xlabel('Epoch'); plt.ylabel('Average DTW Distance'); plt.grid()
+        plt.savefig(f'./models/{cfg.folder_name}/maxent_irl_training_dtw_distance.png')
 
         plt.figure(4)
-        plt.plot(range(1, self.cfg.n_epochs + 1), self.train_log_likelihood)
-        plt.axhline(0, color='red', linestyle='--', linewidth=0.8, label='Converged (LL=0)')
-        plt.title('MaxEnt IRL — Expert Log-Likelihood')
-        plt.xlabel('Epoch')
-        plt.ylabel('Avg log p(τ_expert)')
-        plt.grid()
-        plt.legend()
-        plt.savefig(f'./models/{self.cfg.folder_name}/maxent_irl_log_likelihood.png')
+        plt.plot(epochs, self.train_log_likelihood)
+        plt.title('MaxEnt IRL (Continuous) - Expert Log-Likelihood')
+        plt.xlabel('Epoch'); plt.ylabel('Avg log p(τ_expert)'); plt.grid()
+        plt.savefig(f'./models/{cfg.folder_name}/maxent_irl_log_likelihood.png')
 
-        # Plot reward weights evolution
-        reward_weights_history_arr = np.array(self.reward_weights_history)
-        n_weights = reward_weights_history_arr.shape[1]
-        epochs = range(1, self.cfg.n_epochs + 1)
-
-        # Dynamic grid calculation
-        ncols = 2
-        nrows = math.ceil(n_weights / ncols)
-
-        fig, axes = plt.subplots(nrows, ncols, figsize=(12, 3 * nrows), sharex=True)
-        axes_flat = axes.flatten()
-
-        for i in range(n_weights):
-            ax = axes_flat[i]
-            ax.plot(epochs, reward_weights_history_arr[:, i], color=f'C{i}', linewidth=2)
-            ax.set_title(f'Weight {i+1}')
-            ax.set_ylabel('Value')
-            ax.grid(True, linestyle='--', alpha=0.5)
-
-        # Hide any unused subplots (e.g., if n_weights is 7 but grid is 8)
-        for j in range(i + 1, len(axes_flat)):
-            axes_flat[j].axis('off')
-
-        # Ensure the bottom-most visible plots have x-axis labels
-        for j in range(n_weights):
-            # If the plot below this one is hidden or doesn't exist, it's a bottom plot
-            if j + ncols >= n_weights:
-                axes_flat[j].set_xlabel('Epoch')
-
-        plt.suptitle('Reward Weights Evolution Across Epochs', fontsize=16)
-        plt.tight_layout(rect=[0, 0.03, 1, 0.97])
-
-        # Save the figure
-        save_path = f'./models/{self.cfg.folder_name}/maxent_irl_reward_weights_evolution_dynamic.png'
-        plt.savefig(save_path)
-
-        # Save final reward weights to a text file
-        np.savetxt(f'./models/{self.cfg.folder_name}/final_reward_weights.txt', self.reward_weights, fmt='%.6f')
-
-        plt.show()
+        self._plot_weights_evolution()

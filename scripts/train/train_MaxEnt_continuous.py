@@ -18,8 +18,8 @@ gym.register(
 
 if __name__ == "__main__":
     cfg = MaxEntConfig()
-    cfg.reward_lr = 1e-1
-    cfg.reward_lr_end = 1e-1
+    cfg.reward_lr = 1e-2
+    cfg.reward_lr_end = 1e-2
     cfg.n_epochs = 30
     cfg.rollout_samples = 30
     cfg.segment = "Male 50-59"
@@ -28,7 +28,7 @@ if __name__ == "__main__":
     cfg.validation = True
 
     trainer = MaxEntIRLTrainer_Continuous(
-        initial_reward_weights= np.array([0.8, 0.8, -0.5, -0.5, -1.0, -0.2, -1.0], dtype=np.float32),
+        initial_reward_weights= np.array([1.0, 1.0, -0.5, -0.5, -1.0, -0.2, -1.0], dtype=np.float32),
         expert_trajectories=dataset,
         env_name='V2GEnv-continuous',
         cfg=cfg,

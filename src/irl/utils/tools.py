@@ -37,7 +37,7 @@ class AdamOptimizer:
     
 def compute_dtw(series_a, series_b):
     """
-    Computes the exact Dynamic Time Warping distance between two 1D arrays.
+    Computes the Dynamic Time Warping distance between two 1D arrays.
     """
     n, m = len(series_a), len(series_b)
     
@@ -51,10 +51,9 @@ def compute_dtw(series_a, series_b):
     for i in range(1, n + 1):
         for j in range(1, m + 1):
             # Calculate squared Euclidean distance between points
-            # (You can change this to abs(a-b) for Manhattan distance)
             cost = (series_a[i - 1] - series_b[j - 1]) ** 2
             
-            # Take the cost + the minimum of the three neighbors (Insertion, Deletion, Match)
+            # Take the cost + the minimum of the three neighbors
             last_min = np.min([
                 dtw_matrix[i - 1, j],     # Insertion
                 dtw_matrix[i, j - 1],     # Deletion
@@ -63,6 +62,24 @@ def compute_dtw(series_a, series_b):
             
             dtw_matrix[i, j] = cost + last_min
 
-    # The bottom-right cell contains the cumulative distance
-    # We take sqrt to make it comparable to Euclidean distance
     return np.sqrt(dtw_matrix[n, m])
+
+def compute_mae(soc_a, soc_b):
+    """MAE between two SoC trajectories, resampling to the longer length."""
+    n = max(len(soc_a), len(soc_b))
+    if len(soc_a) != n:
+        soc_a = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(soc_a)), soc_a)
+    if len(soc_b) != n:
+        soc_b = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(soc_b)), soc_b)
+    return float(np.mean(np.abs(soc_a - soc_b)))
+
+def resample_trajectory(values, target_len):
+    """Linearly resample a 1-D array to target_len points."""
+    values = np.asarray(values, dtype=np.float32)
+    if len(values) == target_len:
+        return values
+    if len(values) <= 1:
+        return np.full(target_len, values[0] if len(values) == 1 else 0.0, dtype=np.float32)
+    src_x = np.linspace(0.0, 1.0, num=len(values), dtype=np.float32)
+    dst_x = np.linspace(0.0, 1.0, num=target_len, dtype=np.float32)
+    return np.interp(dst_x, src_x, values).astype(np.float32)

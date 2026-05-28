@@ -5,9 +5,9 @@ import torch
 import warnings
 
 from irl.Adversarial.Adversarial_continuous import (
-    AIRLConfig,
-    AIRLTrainer,
-    load_airl_expert_data,
+    AdversarialConfig,
+    AdversarialTrainer,
+    load_adversarial_expert_data,
 )
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -23,18 +23,19 @@ gym.register(
 )
 
 if __name__ == "__main__":
-    # Run expert_loader_airl_continuous.py first to generate the JSON:
-    #   python -m irl.dataset.expert_loader_airl_continuous
-    train_set, val_set = load_airl_expert_data(
+    # Run expert_loader_adversarial_continuous.py first to generate the JSON:
+    #   python -m irl.dataset.expert_loader_adversarial_continuous
+    train_set, val_set, test_set = load_adversarial_expert_data(
         "data/processed_trajectories_airl_continuous.json",
         segment="Male 50-59",
         train_ratio=0.8,
+        val_ratio=0.1,
     )
 
-    cfg = AIRLConfig()
+    cfg = AdversarialConfig()
 
     # ---- IRL outer loop ----
-    cfg.n_epochs = 50
+    cfg.n_epochs = 30
     cfg.disc_lr = 1e-3
     cfg.disc_lr_end = 1e-3
     cfg.rollout_samples = 30
@@ -69,7 +70,7 @@ if __name__ == "__main__":
     # ---- Misc ----
     cfg.n_envs = 1
     cfg.validation = True
-    cfg.folder_name = "Adversarial/continuous/AIRL_continuous_male5059"
+    cfg.folder_name = "Adversarial/continuous/AIRL_continuous_male5059_new"
     cfg.description = (
         "AIRL continuous (profit env), SAC inner loop.\n"
         "Segment: Male 50-59, 50 epochs, 100k SAC steps/epoch.\n"
@@ -77,9 +78,10 @@ if __name__ == "__main__":
         "gamma=1.0, ent_coef=auto.\n"
     )
 
-    trainer = AIRLTrainer(
+    trainer = AdversarialTrainer(
         train_set=train_set,
         val_set=val_set,
+        test_set=test_set,
         env_name='V2GDeepEnv-continuous',
         cfg=cfg,
     )

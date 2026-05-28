@@ -3,13 +3,13 @@ import gymnasium as gym
 import numpy as np
 import torch
 from irl.Adversarial.Adversarial_discrete import (
-    AIRLConfig,
-    AIRLTrainer,
-    load_airl_expert_data,
+    AdversarialConfig,
+    AdversarialTrainer,
+    load_adversarial_expert_data,
 )
 import warnings
 
-#warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
 
 SEED = 42
 torch.manual_seed(SEED)
@@ -22,23 +22,19 @@ gym.register(
 )
 
 if __name__ == "__main__":
-    train_set, val_set = load_airl_expert_data(
+    train_set, val_set, test_set = load_adversarial_expert_data(
         "data/processed_trajectories_airl_discrete_pricediff.json",
-        segment="Male 40-49",
+        segment="Female 50-59",
         train_ratio=0.8,
+        val_ratio=0.1,
     )
 
-    cfg = AIRLConfig()
+    cfg = AdversarialConfig()
     cfg.n_epochs = 20
     cfg.disc_lr = 1e-3
     cfg.disc_lr_end = 1e-3
     cfg.rollout_samples = 30
     cfg.policy_train_steps_per_iter = 1_500_000
-    # γ=1.0: SBX PPO applies its discount once per *action* regardless of Δt.
-    # Using γ<1 would mismatch the γ^Δt shaping term in _compute_f, breaking the
-    # AIRL disentanglement guarantee.  With γ=1.0, γ^Δt=1 everywhere and PPO and
-    # the discriminator both use undiscounted returns — consistent and correct for
-    # this finite-horizon episodic task.
     cfg.policy_gamma = 1.0
     cfg.policy_n_steps = 2048
     cfg.policy_n_epochs = 10
@@ -54,10 +50,10 @@ if __name__ == "__main__":
     cfg.bc_lr = 1e-3
     cfg.validation = True
     cfg.n_envs = 4
-    cfg.folder_name = "Adversarial/discrete/Adversarial_discrete_male4049"
+    cfg.folder_name = "Adversarial/discrete/Adversarial_discrete_female5059_new"
 
     cfg.description = (
-        "Segment: Male 40-49. 20 epochs, 1.5M PPO steps/epoch, "
+        "Segment: Female 50-59. 20 epochs, 1.5M PPO steps/epoch, "
         "BC pre-training 5000 steps (key fix: policy started from random init, "
         "never visited expert states, discriminator couldn't provide useful gradient). "
         "reward_scale=0.2, disc_epochs=1, ent_coef=0.1, reset_ppo=True, gamma=1.0."
@@ -67,9 +63,10 @@ if __name__ == "__main__":
     cfg.pretrained_reward_net_path = None
     cfg.pretrained_shaping_net_path = None
 
-    trainer = AIRLTrainer(
+    trainer = AdversarialTrainer(
         train_set=train_set,
         val_set=val_set,
+        test_set=test_set,
         env_name='V2GDeepEnv-discrete',
         cfg=cfg,
     )

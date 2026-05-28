@@ -79,12 +79,23 @@ def plot_distribution_fit(data, distribution_name, bins=30, name='Data', floc=0,
     if distribution_name == 'norm':
         mu, sigma = params
         ax.plot(x, stats.norm.pdf(x, mu, sigma), linewidth=2, label=f"Normal (mu={mu:.4f}, sigma={sigma:.4f})")
+        ax.set_title(f'Normal Distribution Fit for {name}')
     elif distribution_name == 'gamma':
         a, loc, scale = params
         ax.plot(x, stats.gamma.pdf(x, a, loc=loc, scale=scale), linewidth=2, label=f"Gamma (a={a:.4f}, loc={loc:.4f}, scale={scale:.4f})")
+        ax.set_title(f'Gamma Distribution Fit for {name}')
 
-    ax.set_title(f'{distribution_name} Distribution Fit for {name}')
-    ax.set_xlabel('Value')
+    if name == "Initial SoC":
+        ax.set_xlabel('SoC')
+    elif name == "Out Start Timestep":
+        ax.set_xlabel('Timestep')
+    elif name == "Return Start Timestep":
+        ax.set_xlabel('Timestep')
+    elif name == "Journey Speed":
+        ax.set_xlabel('Journey Speed')
+    elif name == "Journey Distance":
+        ax.set_xlabel('Journey Distance')
+
     ax.set_ylabel('Density')
     ax.legend()
 
@@ -127,7 +138,7 @@ def plot_exponential_fit(data, bins=30, name='Data', ax=None):
     ax.plot(x, stats.expon.pdf(x, loc=loc, scale=scale), linewidth=2, label=f"Exponential (loc={loc:.4f}, scale={scale:.4f})")
 
     ax.set_title(f'Exponential Distribution Fit for {name}')
-    ax.set_xlabel('Value')
+    ax.set_xlabel('Journey Distance')
     ax.set_ylabel('Density')
     ax.legend()
 

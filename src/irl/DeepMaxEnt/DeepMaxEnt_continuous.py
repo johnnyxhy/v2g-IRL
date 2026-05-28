@@ -1,18 +1,12 @@
 import numpy as np
 import json
-import csv
 import gymnasium as gym
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from sbx import SAC
-import matplotlib.pyplot as plt
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.monitor import Monitor
-from irl.DeepMaxEnt.DeepMaxEnt import RewardNet, flatten_obs_dict, PROFIT_OBS_SCALES
-from irl.utils.tools import compute_dtw
+from irl.DeepMaxEnt.DeepMaxEnt import BaseDeepMaxEntTrainer, flatten_obs_dict
 from irl.utils.variable_dt_buffer import VariableDtReplayBuffer
-from tqdm import tqdm
-import os
-
 import torch
 import jax.numpy as jnp
 
@@ -77,12 +71,12 @@ class DeepExpertTrajectory:
     feature_expectation: np.ndarray   # (n_features,) for monitoring
 
 
-def load_deep_expert_data(json_path, segment=None, train_ratio=0.8):
+def load_deep_expert_data(json_path, segment=None, train_ratio=0.8, val_ratio=0.1):
     """
     Load expert trajectories from the deep-format JSON file.
 
     Returns:
-        (train_set, val_set): lists of DeepExpertTrajectory
+        (train_set, val_set, test_set): lists of DeepExpertTrajectory
     """
     with open(json_path, 'r') as f:
         data = json.load(f)
@@ -108,14 +102,15 @@ def load_deep_expert_data(json_path, segment=None, train_ratio=0.8):
         trajectories = [t for t in trajectories if segment in t.segment]
 
     n_train = int(len(trajectories) * train_ratio)
-    return trajectories[:n_train], trajectories[n_train:]
+    n_val = int(len(trajectories) * val_ratio)
+    return trajectories[:n_train], trajectories[n_train:n_train + n_val], trajectories[n_train + n_val:]
 
 
 # ------------------------------------------------------------------ #
 #  Trainer                                                             #
 # ------------------------------------------------------------------ #
 
-class DeepMaxEntIRLTrainer:
+class DeepMaxEntIRLTrainer(BaseDeepMaxEntTrainer):
     """
     Deep Maximum Entropy Inverse Reinforcement Learning trainer.
 
@@ -129,47 +124,10 @@ class DeepMaxEntIRLTrainer:
                  train_set: list,
                  val_set: list,
                  env_name: str,
-                 cfg: DeepMaxEntConfig):
-        self.cfg = cfg
-        self.env_name = env_name
-        self.train_set = train_set
-        self.val_set = val_set
-
-        # Observation normalization scales
-        self.obs_scales = torch.tensor(PROFIT_OBS_SCALES, dtype=torch.float32)
-
-        # Build reward network
-        self.reward_net = RewardNet(
-            obs_dim=cfg.reward_obs_dim,
-            action_dim=cfg.reward_action_dim,
-            hidden_dim=cfg.reward_hidden_dim,
-        )
-        if cfg.pretrained_reward_net_path is not None:
-            self.reward_net.load_state_dict(
-                torch.load(cfg.pretrained_reward_net_path, weights_only=True)
-            )
-            print(f"Loaded pretrained reward network from {cfg.pretrained_reward_net_path}")
-        self.reward_optimizer = torch.optim.AdamW(
-            self.reward_net.parameters(), lr=cfg.reward_lr,
-            weight_decay=cfg.reward_l2_reg,
-        )
-        self.reward_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.reward_optimizer, T_max=cfg.n_epochs, eta_min=cfg.reward_lr_end
-        )
-
-        # Tracking
-        self.train_dtw_distance = []
-        self.train_mae = []
-        self.train_feat_l2 = []
-        self.val_dtw_distance = []
-        self.val_mae = []
-        self.val_feat_l2 = []
-        self.train_reward_loss = []
-        self.train_log_likelihood = []
-
-        os.makedirs(f"./models/{cfg.folder_name}", exist_ok=True)
-
-        print(f"Deep MaxEnt IRL Trainer: {len(self.train_set)} train, {len(self.val_set)} val trajectories.")
+                 cfg: DeepMaxEntConfig,
+                 test_set: list = None):
+        super().__init__(train_set, val_set, env_name, cfg, test_set)
+        print(f"Deep MaxEnt IRL Trainer: {len(self.train_set)} train, {len(self.val_set)} val, {len(self.test_set)} test trajectories.")
 
     # -------------------------------------------------------------- #
     #  Main training loop                                              #
@@ -211,7 +169,6 @@ class DeepMaxEntIRLTrainer:
             print(f"\nEpoch {epoch+1}/{cfg.n_epochs}: Starting training...")
 
             # ---------- 1. SAC policy training ----------
-            # Set reward net in training & rollout envs
             vec_env.envs[0].unwrapped.set_reward_net(self.reward_net)
             vec_env.envs[0].unwrapped.set_action_penalty_coeff(cfg.action_penalty_coeff)
             vec_env.envs[0].unwrapped.set_initial_states(None)
@@ -233,174 +190,37 @@ class DeepMaxEntIRLTrainer:
             )
 
             # ---------- 2. IRL gradient update ----------
-            self.reward_optimizer.zero_grad()
-            N = len(self.train_set)
-
-            avg_dtw = 0.0
-            avg_mae = 0.0
-            avg_feat_l2 = 0.0
-            avg_reward_loss = 0.0
-            avg_log_likelihood = 0.0
-
-            for traj in tqdm(self.train_set, desc="IRL gradient"):
-                # --- Expert state-action pairs (normalized) ---
-                expert_obs = torch.tensor(traj.observations, dtype=torch.float32) / self.obs_scales
-                expert_act = torch.tensor(traj.actions, dtype=torch.float32)
-                expert_feat = traj.feature_expectation
-
-                # Expert reward: R_net(s,a) weighted by delta_t (matches SAC's cumulative reward)
-                expert_dt = torch.tensor(traj.delta_ts, dtype=torch.float32)
-                expert_reward = (self.reward_net(expert_obs, expert_act) * expert_dt).sum()
-
-                # --- Agent rollouts ---
-                rollout_obs_all = []
-                rollout_act_all = []
-                rollout_env_rewards = []
-
-                rollout_dt_all = []
-
-                for _ in range(cfg.rollout_samples):
-                    obs_list, act_list, dt_list, env_reward, soc_hist, feat_exp = self._do_rollout(
-                        rollout_env, model, traj
-                    )
-                    rollout_obs_all.append(obs_list)
-                    rollout_act_all.append(act_list)
-                    rollout_dt_all.append(dt_list)
-                    rollout_env_rewards.append(env_reward)
-
-                    # DTW / MAE monitoring
-                    expert_soc = np.array(traj.soc_history, dtype=np.float32)
-                    agent_soc = np.array(soc_hist, dtype=np.float32)
-                    avg_dtw += compute_dtw(expert_soc, agent_soc) / (N * cfg.rollout_samples)
-                    avg_mae += self._compute_mae(expert_soc, agent_soc) / (N * cfg.rollout_samples)
-
-                    # Feature L2 monitoring
-                    avg_feat_l2 += np.linalg.norm(expert_feat - feat_exp) / (N * cfg.rollout_samples)
-
-                # Compute log Z = logsumexp(R(τ_k)) over rollouts.
-                # ∇θ logsumexp = Σ_k softmax(r_k) * ∇θ r_k, which is the correct MaxEnt
-                # partition function gradient. Using logsumexp directly also gives the
-                # correct loss value: loss = -(R(τ_expert) - log Z).
-                rollout_rewards = []
-                for k in range(cfg.rollout_samples):
-                    obs_t = torch.tensor(np.array(rollout_obs_all[k]), dtype=torch.float32)
-                    act_t = torch.tensor(np.array(rollout_act_all[k]), dtype=torch.float32)
-                    dt_t  = torch.tensor(np.array(rollout_dt_all[k]),  dtype=torch.float32)
-                    r_k = (self.reward_net(obs_t, act_t) * dt_t).sum()
-                    rollout_rewards.append(r_k)
-
-                # log Z: differentiable; gradient = softmax-weighted ∇θ R(τ_k)
-                log_Z = torch.logsumexp(torch.stack(rollout_rewards), dim=0)
-
-                # Log-likelihood: R(τ_expert) - log Z, where Z is estimated from rollouts only.
-                # Can be positive when expert reward exceeds all rollout rewards.
-                avg_log_likelihood += (expert_reward.detach() - log_Z.detach()).item() / N
-
-                loss_traj = -(expert_reward - log_Z) / N
-                loss_traj.backward()
-                avg_reward_loss += loss_traj.item()
-
-            if cfg.reward_grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    self.reward_net.parameters(), max_norm=cfg.reward_grad_clip
-                )
-            self.reward_optimizer.step()
-            self.reward_scheduler.step()
-
-            current_lr = self.reward_scheduler.get_last_lr()[0]
+            avg_dtw, avg_mae, avg_feat_l2, avg_reward_loss, avg_log_likelihood = \
+                self._irl_gradient_update(rollout_env, model)
 
             # ---------- 3. Validation ----------
-            val_dtw = 0.0
-            val_mae = 0.0
-            val_feat_l2 = 0.0
-            if cfg.validation and len(self.val_set) > 0:
-                print("Validating...")
-                M = len(self.val_set)
-                for traj in tqdm(self.val_set, desc="Validation"):
-                    _, _, _, _, soc_hist, feat_exp = self._do_rollout(
-                        rollout_env, model, traj, deterministic=False
-                    )
-                    expert_soc = np.array(traj.soc_history, dtype=np.float32)
-                    agent_soc = np.array(soc_hist, dtype=np.float32)
-                    val_dtw += compute_dtw(expert_soc, agent_soc) / M
-                    val_mae += self._compute_mae(expert_soc, agent_soc) / M
-                    val_feat_l2 += np.linalg.norm(traj.feature_expectation - feat_exp) / M
+            val_dtw, val_mae, val_feat_l2 = self._run_validation(rollout_env, model)
 
-            # ---------- 4. Logging ----------
-            self.train_dtw_distance.append(avg_dtw)
-            self.train_mae.append(avg_mae)
-            self.train_feat_l2.append(avg_feat_l2)
-            self.train_reward_loss.append(avg_reward_loss)
-            self.train_log_likelihood.append(avg_log_likelihood)
-            if cfg.validation and len(self.val_set) > 0:
-                self.val_dtw_distance.append(val_dtw)
-                self.val_mae.append(val_mae)
-                self.val_feat_l2.append(val_feat_l2)
-
-            print(f"--- Epoch {epoch+1}/{cfg.n_epochs} Summary ---")
-            print(f"Reward Loss: {avg_reward_loss:.4f}, Log-Likelihood: {avg_log_likelihood:.4f}, LR: {current_lr:.6f}")
-            print(f"Train DTW: {avg_dtw:.4f}, Train MAE: {avg_mae:.4f}, Train Feat L2: {avg_feat_l2:.4f}")
-            if cfg.validation and len(self.val_set) > 0:
-                print(f"Val DTW: {val_dtw:.4f}, Val MAE: {val_mae:.4f}, Val Feat L2: {val_feat_l2:.4f}")
-
-            # Save metrics to CSV (append — survives checkpoint continuations)
-            metrics_path = f"./models/{cfg.folder_name}/metrics.csv"
-            write_header = not os.path.exists(metrics_path)
-            with open(metrics_path, 'a', newline='') as f:
-                writer = csv.writer(f)
-                if write_header:
-                    writer.writerow(['epoch', 'train_dtw', 'train_mae', 'train_feat_l2', 'reward_loss',
-                                     'log_likelihood', 'val_dtw', 'val_mae', 'val_feat_l2', 'lr'])
-                writer.writerow([
-                    epoch + 1,
-                    round(avg_dtw, 6),
-                    round(avg_mae, 6),
-                    round(avg_feat_l2, 6),
-                    round(avg_reward_loss, 6),
-                    round(avg_log_likelihood, 6),
-                    round(val_dtw, 6) if (cfg.validation and len(self.val_set) > 0) else '',
-                    round(val_mae, 6) if (cfg.validation and len(self.val_set) > 0) else '',
-                    round(val_feat_l2, 6) if (cfg.validation and len(self.val_set) > 0) else '',
-                    round(current_lr, 8),
-                ])
+            # ---------- 4-5. Logging + CSV ----------
+            current_lr = self.reward_scheduler.get_last_lr()[0]
+            self._log_and_save_epoch(epoch, avg_dtw, avg_mae, avg_feat_l2,
+                                     avg_reward_loss, avg_log_likelihood,
+                                     val_dtw, val_mae, val_feat_l2, current_lr)
 
             model.save(f"./models/{cfg.folder_name}/sac_epoch{epoch+1}")
             torch.save(self.reward_net.state_dict(), f"./models/{cfg.folder_name}/reward_net_epoch{epoch+1}.pt")
 
-        self.__plot_results()
+        self._plot_results()
+
+        if self.test_set:
+            self._evaluate_test_set(rollout_env, model, n_rollouts=30)
+
         print("Training completed.")
 
     # -------------------------------------------------------------- #
     #  Helpers                                                         #
     # -------------------------------------------------------------- #
 
-    @staticmethod
-    def _compute_mae(soc_a: np.ndarray, soc_b: np.ndarray) -> float:
-        """MAE between two SoC trajectories, resampling to the longer length."""
-        n = max(len(soc_a), len(soc_b))
-        if len(soc_a) != n:
-            soc_a = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(soc_a)), soc_a)
-        if len(soc_b) != n:
-            soc_b = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(soc_b)), soc_b)
-        return float(np.mean(np.abs(soc_a - soc_b)))
-
     def _do_rollout(self, rollout_env, model, traj, deterministic=False):
-        """
-        Run one episode from the expert's initial state.
-
-        Returns:
-            obs_list:   list of normalized obs arrays (T, obs_dim)
-            act_list:   list of action arrays (T, action_dim)
-            traj_reward: scalar total env reward
-            soc_history: list of SoC values
-            feature_expectation: np.ndarray
-        """
         rollout_env.envs[0].unwrapped.set_initial_states(traj.initial_values)
         obs = rollout_env.reset()
 
-        obs_list = []
-        act_list = []
-        dt_list = []
+        obs_list, act_list, dt_list = [], [], []
         traj_reward = 0.0
         done = False
 
@@ -419,71 +239,4 @@ class DeepMaxEntIRLTrainer:
 
         soc_history = infos[0]['soc_history']
         feature_expectation = np.array(infos[0]['feature_expectation'], dtype=np.float32)
-
         return obs_list, act_list, dt_list, traj_reward, soc_history, feature_expectation
-
-    # -------------------------------------------------------------- #
-    #  Plotting                                                        #
-    # -------------------------------------------------------------- #
-
-    def __plot_results(self):
-        cfg = self.cfg
-        epochs = range(1, cfg.n_epochs + 1)
-
-        # DTW distance
-        plt.figure(1)
-        plt.plot(epochs, self.train_dtw_distance, label='Train DTW')
-        if cfg.validation and len(self.val_set) > 0:
-            plt.plot(epochs, self.val_dtw_distance, label='Val DTW')
-            plt.legend()
-        plt.title('Deep MaxEnt IRL — DTW Distance')
-        plt.xlabel('Epoch')
-        plt.ylabel('Average DTW Distance')
-        plt.grid()
-        plt.savefig(f'./models/{cfg.folder_name}/dtw_distance.png')
-
-        # MAE
-        plt.figure(2)
-        plt.plot(epochs, self.train_mae, label='Train MAE')
-        if cfg.validation and len(self.val_set) > 0 and self.val_mae:
-            plt.plot(epochs, self.val_mae, label='Val MAE')
-            plt.legend()
-        plt.title('Deep MaxEnt IRL — SoC MAE')
-        plt.xlabel('Epoch')
-        plt.ylabel('Average MAE')
-        plt.grid()
-        plt.savefig(f'./models/{cfg.folder_name}/mae.png')
-
-        # Feature L2
-        plt.figure(3)
-        plt.plot(epochs, self.train_feat_l2, label='Train Feature L2')
-        if cfg.validation and len(self.val_set) > 0:
-            plt.plot(epochs, self.val_feat_l2, label='Val Feature L2')
-            plt.legend()
-        plt.title('Deep MaxEnt IRL — Feature L2 Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Average Feature L2')
-        plt.grid()
-        plt.savefig(f'./models/{cfg.folder_name}/feature_l2.png')
-
-        # Reward loss
-        plt.figure(4)
-        plt.plot(epochs, self.train_reward_loss)
-        plt.title('Deep MaxEnt IRL — Reward Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss (neg log-likelihood)')
-        plt.grid()
-        plt.savefig(f'./models/{cfg.folder_name}/reward_loss.png')
-
-        # Log-likelihood
-        plt.figure(5)
-        plt.plot(epochs, self.train_log_likelihood)
-        plt.axhline(0, color='red', linestyle='--', linewidth=0.8, label='Converged (LL=0)')
-        plt.title('Deep MaxEnt IRL — Expert Log-Likelihood')
-        plt.xlabel('Epoch')
-        plt.ylabel('Avg log p(τ_expert)')
-        plt.grid()
-        plt.legend()
-        plt.savefig(f'./models/{cfg.folder_name}/log_likelihood.png')
-
-        plt.show()

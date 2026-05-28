@@ -1,0 +1,1 @@
+Added 0.2 buffer, using soc_gap. Running with new dataset, 20 epochs, 1.5M policy steps per epoch, 0.01 entropy coeff, 0.01 reward L2 reg, 5.0 grad clip, reward scale 10.0, no action penalty.

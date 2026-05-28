@@ -1,0 +1,1 @@
+State-only reward net g_θ(s) — action input removed from reward network to match Fu et al. (2018) disentanglement formulation. Segment: Male 50-59. 20 epochs, 1.5M PPO steps/epoch, BC pre-training 5000 steps, reward_scale=0.2, disc_epochs=1, gamma=1.0.

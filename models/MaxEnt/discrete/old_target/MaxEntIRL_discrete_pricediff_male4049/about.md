@@ -1,1 +1,1 @@
-new soc_target, 20 epochs, 1,500,000 PPO steps, PPO reset, 0.01 boundary penalty, 0.01 l2 reg, 0.01 lr
+replace soc_target with soc_gap, new soc_target, 20 epochs, 1,500,000 PPO steps, PPO reset, 0.01 boundary penalty, 0.01 l2 reg, 0.01 lr

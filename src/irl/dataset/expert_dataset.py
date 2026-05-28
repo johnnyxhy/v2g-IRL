@@ -43,9 +43,9 @@ class ExpertDataset:
             )
             self.trajectories.append(expert_traj)
     
-    def split_dataset(self, train_ratio: float = 0.8, segment = None):
+    def split_dataset(self, train_ratio: float = 0.8, segment=None, val_ratio: float = 0.1):
         """
-        Split the dataset into training and validation sets
+        Split the dataset into training, validation, and test sets.
         """
         if segment is not None:
             filtered_trajectories = [traj for traj in self.trajectories if segment in traj.segment]
@@ -53,6 +53,8 @@ class ExpertDataset:
             filtered_trajectories = self.trajectories
 
         n_train = int(len(filtered_trajectories) * train_ratio)
+        n_val = int(len(filtered_trajectories) * val_ratio)
         train_set = filtered_trajectories[:n_train]
-        val_set = filtered_trajectories[n_train:]
-        return train_set, val_set
+        val_set = filtered_trajectories[n_train:n_train + n_val]
+        test_set = filtered_trajectories[n_train + n_val:]
+        return train_set, val_set, test_set

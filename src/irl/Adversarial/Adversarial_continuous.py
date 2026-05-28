@@ -1,52 +1,11 @@
 """
-Adversarial Inverse Reinforcement Learning (AIRL) for V2G continuous profit environment.
+Adversarial Inverse Reinforcement Learning for V2G continuous environment.
 
 Based on: Fu, Luo, Levine (2018)
     "Learning Robust Rewards with Adversarial Inverse Reinforcement Learning"
     https://arxiv.org/abs/1710.11248
-
-Architecture
-────────────
-Generator  — SAC policy π(a|s) trained to maximise the AIRL reward f(s,a,s').
-
-Discriminator — structured sigmoid (NOT a free network):
-
-    D_θ,φ(s,a,s') = σ( f_θ,φ(s,a,s') − log π(a|s) )
-
-    where the reward shaping function is:
-
-        f_θ,φ(s, a, s', Δt, done)
-            = g_θ(s,a)                           ← reward net  (interpretable)
-            + γ^Δt · (1−done) · h_φ(s')          ← future shaping
-            − h_φ(s)                              ← current shaping
-
-Discriminator loss (binary cross-entropy, expert=1 / policy=0):
-
-    L_D = −E_expert[log D] − E_π[log(1−D)]
-        = BCE_with_logits(f_expert − log π, 1)
-        + BCE_with_logits(f_policy  − log π, 0)
-
-SAC reward (generator signal):
-    The AIRL reward f(s,a,s') is computed inside V2GDeepEnv_profit when
-    shaping_net is set.  SAC maximises E[f] + ent_coef * H(π), which with
-    ent_coef = 1.0 is exactly E[f − log π] (the theoretical AIRL objective).
-
-Differences from Adversarial_discrete.py
-─────────────────────────────────────────
-    Discrete: PPO + Categorical policy + integer actions + AIRLRewardVecEnvWrapper
-    Continuous: SAC + squashed-Gaussian policy + float actions
-                No AIRLRewardVecEnvWrapper — the env computes f directly and SAC's
-                entropy term with ent_coef = 1.0 provides the −log π correction.
-                log π is still computed offline for the discriminator update.
-
-Variable Δt
-───────────
-The environment uses variable-length actions.  The shaping term uses γ^Δt
-(consistent with VariableDtReplayBuffer's Bellman backup) so the discriminator
-stays aligned with SAC's Q-function.
 """
 
-import warnings
 import numpy as np
 import json
 import csv
@@ -54,87 +13,22 @@ import gymnasium as gym
 from dataclasses import dataclass
 from sbx import SAC
 from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
-from irl.DeepMaxEnt.DeepMaxEnt import RewardNet, PROFIT_OBS_SCALES
-from irl.utils.tools import compute_dtw
+from irl.Adversarial.Adversarial import OBS_SCALES, FlattenNormalizeObsWrapper, BaseAdversarialTrainer
+from irl.utils.tools import compute_dtw, compute_mae
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 import os
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import jax.numpy as jnp
-
-
-# ------------------------------------------------------------------ #
-#  Observation wrapper: flatten + normalize Dict obs for MlpPolicy    #
-# ------------------------------------------------------------------ #
-
-class FlattenNormalizeObsWrapper(gym.ObservationWrapper):
-    """
-    Converts the Dict observation space to a normalized flat Box.
-    Normalization uses PROFIT_OBS_SCALES (shared with the env and discriminator).
-    """
-    def __init__(self, env):
-        super().__init__(env)
-        obs_dim = len(PROFIT_OBS_SCALES)
-        self.observation_space = gym.spaces.Box(
-            low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
-        )
-        self._scales = np.array(PROFIT_OBS_SCALES, dtype=np.float32)
-
-    def observation(self, obs):
-        raw = np.concatenate([
-            np.asarray(obs['timestep']).flatten(),
-            np.asarray(obs['soc']).flatten(),
-            np.asarray(obs['soc_gap']).flatten(),
-            np.asarray(obs['energy_price']).flatten(),
-            np.asarray(obs['battery_capacity']).flatten(),
-            np.asarray(obs['time_to_next_journey']).flatten(),
-            np.asarray(obs['current_charger_power']).flatten(),
-        ]).astype(np.float32)
-        return raw / self._scales
-
-
-# ------------------------------------------------------------------ #
-#  Shaping network h_φ(s)                                             #
-# ------------------------------------------------------------------ #
-
-class ShapingNet(nn.Module):
-    """
-    Neural network approximating the AIRL potential function h_φ(s).
-
-    Takes only the (normalized) observation as input and outputs an unbounded
-    scalar.  At convergence the shaping term γ^Δt · h_φ(s') − h_φ(s) cancels
-    out of the recovered reward g_θ(s,a), leaving g_θ = r* + const.
-    """
-
-    def __init__(self, obs_dim: int = 7, hidden_dim: int = 64):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(obs_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
-        )
-
-    def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            obs: (batch, obs_dim) normalized observations
-        Returns:
-            (batch,) scalar potential values
-        """
-        return self.net(obs).squeeze(-1)
 
 
 # ------------------------------------------------------------------ #
 #  Configuration                                                       #
 # ------------------------------------------------------------------ #
 
-class AIRLConfig:
-    """Configuration for AIRL training with SAC inner loop (continuous profit env)."""
+class AdversarialConfig:
+    """Configuration for Adversarial IRL training with SAC inner loop (continuous environment)."""
 
     # IRL outer loop
     n_epochs: int = 10
@@ -155,15 +49,10 @@ class AIRLConfig:
     # SAC inner loop
     policy_train_steps_per_iter: int = 100_000
     policy_train_lr: float = 3e-4
-    # γ=1.0 recommended: SBX SAC applies discount once per action step, so any γ<1
-    # mismatch the γ^Δt shaping term in _compute_f for variable-Δt actions.
     policy_gamma: float = 1.0
     policy_batch_size: int = 64
     policy_buffer_size: int = 100_000
     policy_learning_starts: int = 1_000
-    # ent_coef='auto' let SAC tune entropy automatically.
-    # With ent_coef=1.0, SAC exactly maximises E[f − log π] matching AIRL theory.
-    # With 'auto', the discriminator still uses logit = f − log π correctly.
     policy_ent_coef: str = 'auto'
 
     # Data
@@ -171,8 +60,6 @@ class AIRLConfig:
     segment: str = None
 
     # Discriminator training epochs per IRL epoch.
-    # Discriminator steps once after EACH trajectory (mini-batch GD).
-    # Total updates = disc_epochs × N_train.
     disc_epochs: int = 1
 
     # Discriminator regularisation
@@ -185,7 +72,7 @@ class AIRLConfig:
     # without changing the discriminator's logit or gradient.
     reward_scale: float = 1.0
 
-    # Behavioral Cloning pre-training (optional).
+    # Behavioral Cloning pre-training.
     bc_pretrain_steps: int = 0   # number of Adam gradient steps (0 = disabled)
     bc_lr: float = 1e-3
 
@@ -199,21 +86,17 @@ class AIRLConfig:
     description: str = ""
 
     # Saving
-    folder_name: str = "AIRL_continuous"
+    folder_name: str = "Adversarial_continuous"
 
 
 # ------------------------------------------------------------------ #
-#  Expert data loading (AIRL format)                                   #
+#  Expert data loading                                                 #
 # ------------------------------------------------------------------ #
 
 @dataclass
-class AIRLExpertTrajectory:
+class AdversarialExpertTrajectory:
     """
-    Expert demonstration in AIRL format for the continuous profit environment.
-
-    Compared with the discrete format, raw_actions is absent: continuous actions
-    are already floats in [-1, 1] and can be used directly for log π(a|s) under
-    the SAC squashed-Gaussian policy.
+    Expert demonstration in Adversarial IRL format for the continuous environment.
     """
     episodeID: int
     segment: str
@@ -227,13 +110,13 @@ class AIRLExpertTrajectory:
     feature_expectation: np.ndarray # (n_features,) for monitoring only
 
 
-def load_airl_expert_data(json_path: str, segment=None, train_ratio: float = 0.8):
+def load_adversarial_expert_data(json_path: str, segment=None, train_ratio: float = 0.8, val_ratio: float = 0.1):
     """
-    Load AIRL-format trajectories from a JSON file produced by
+    Load Adversarial IRL-format trajectories from a JSON file produced by
     expert_loader_airl_continuous.py.
 
     Returns:
-        train_set, val_set — lists of AIRLExpertTrajectory
+        train_set, val_set, test_set — lists of AdversarialExpertTrajectory
     """
     with open(json_path, 'r') as f:
         data = json.load(f)
@@ -241,7 +124,7 @@ def load_airl_expert_data(json_path: str, segment=None, train_ratio: float = 0.8
     trajectories = []
     for traj in data:
         sap = traj['state_action_pairs']
-        expert = AIRLExpertTrajectory(
+        expert = AdversarialExpertTrajectory(
             episodeID=traj['episodeID'],
             segment=traj['segment'],
             initial_values=traj['initial_values'],
@@ -259,96 +142,20 @@ def load_airl_expert_data(json_path: str, segment=None, train_ratio: float = 0.8
         trajectories = [t for t in trajectories if segment in t.segment]
 
     n_train = int(len(trajectories) * train_ratio)
-    return trajectories[:n_train], trajectories[n_train:]
+    n_val = int(len(trajectories) * val_ratio)
+    return trajectories[:n_train], trajectories[n_train:n_train + n_val], trajectories[n_train + n_val:]
 
 
 # ------------------------------------------------------------------ #
-#  AIRL Trainer                                                        #
+#  Adversarial IRL Trainer (continuous)                                #
 # ------------------------------------------------------------------ #
 
-class AIRLTrainer:
+class AdversarialTrainer(BaseAdversarialTrainer):
     """
     Adversarial IRL trainer for V2GDeepEnv (profit) using SBX SAC.
-
-    The env computes the AIRL reward f = g_θ(s,a) + γ^Δt·(1−done)·h_φ(s')−h_φ(s)
-    directly when shaping_net is set.  SAC with ent_coef≈1 maximises E[f−log π].
-    The discriminator is updated offline using logit = f − log π for both expert
-    and policy transitions, with log π evaluated from the current SAC actor.
-
-    Outer loop (per epoch):
-        1. Push g_θ and h_φ into all training envs.
-        2. Train SAC for `policy_train_steps_per_iter` steps under f.
-        3. For each expert trajectory:
-             a. Collect `rollout_samples` stochastic SAC rollouts.
-             b. Evaluate log π(a|s) on expert + policy transitions.
-             c. Compute discriminator logits: logit = f(s,a,s',Δt,done) − log π.
-             d. Accumulate BCE loss.
-        4. Update g_θ and h_φ with mini-batch GD (step after each trajectory).
-        5. (Optional) validate on held-out trajectories.
     """
 
-    def __init__(self,
-                 train_set: list,
-                 val_set: list,
-                 env_name: str,
-                 cfg: AIRLConfig):
-        self.cfg = cfg
-        self.env_name = env_name
-        self.train_set = train_set
-        self.val_set = val_set
-
-        self.obs_scales = torch.tensor(PROFIT_OBS_SCALES, dtype=torch.float32)
-        self.device = torch.device("cpu")
-
-        # ---- Networks ----
-        self.reward_net = RewardNet(
-            obs_dim=cfg.reward_obs_dim,
-            action_dim=cfg.reward_action_dim,
-            hidden_dim=cfg.reward_hidden_dim,
-        )
-        self.shaping_net = ShapingNet(
-            obs_dim=cfg.reward_obs_dim,
-            hidden_dim=cfg.shaping_hidden_dim,
-        )
-
-        if cfg.pretrained_reward_net_path is not None:
-            self.reward_net.load_state_dict(
-                torch.load(cfg.pretrained_reward_net_path, weights_only=True)
-            )
-            print(f"Loaded pretrained reward net from {cfg.pretrained_reward_net_path}")
-
-        if cfg.pretrained_shaping_net_path is not None:
-            self.shaping_net.load_state_dict(
-                torch.load(cfg.pretrained_shaping_net_path, weights_only=True)
-            )
-            print(f"Loaded pretrained shaping net from {cfg.pretrained_shaping_net_path}")
-
-        # ---- Single optimiser for both discriminator networks ----
-        self.disc_optimizer = torch.optim.AdamW(
-            list(self.reward_net.parameters()) + list(self.shaping_net.parameters()),
-            lr=cfg.disc_lr,
-            weight_decay=cfg.disc_l2_reg,
-        )
-        self.disc_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.disc_optimizer, T_max=cfg.n_epochs, eta_min=cfg.disc_lr_end
-        )
-
-        # ---- Tracking ----
-        self.train_dtw_distance = []
-        self.train_mae = []
-        self.train_feat_l2 = []
-        self.val_dtw_distance = []
-        self.val_mae = []
-        self.val_feat_l2 = []
-        self.train_disc_loss = []
-        self.train_expert_acc = []
-        self.train_policy_acc = []
-
-        os.makedirs(f"./models/{cfg.folder_name}", exist_ok=True)
-        print(
-            f"AIRL (continuous) Trainer: {len(self.train_set)} train, "
-            f"{len(self.val_set)} val trajectories."
-        )
+    plot_title_prefix = "Adversarial IRL (continuous)"
 
     # -------------------------------------------------------------- #
     #  Main training loop                                              #
@@ -469,7 +276,7 @@ class AIRLTrainer:
                     avg_dtw += compute_dtw(expert_soc, np.array(soc_hist, dtype=np.float32)) / (
                         N * cfg.rollout_samples
                     )
-                    avg_mae += self._compute_mae(expert_soc, np.array(soc_hist, dtype=np.float32)) / (
+                    avg_mae += compute_mae(expert_soc, np.array(soc_hist, dtype=np.float32)) / (
                         N * cfg.rollout_samples
                     )
                     avg_feat_l2 += np.linalg.norm(traj.feature_expectation - feat_exp) / (
@@ -596,7 +403,7 @@ class AIRLTrainer:
                         np.array(traj.soc_history, dtype=np.float32),
                         np.array(soc_hist, dtype=np.float32),
                     ) / M
-                    val_mae += self._compute_mae(
+                    val_mae += compute_mae(
                         np.array(traj.soc_history, dtype=np.float32),
                         np.array(soc_hist, dtype=np.float32),
                     ) / M
@@ -678,44 +485,22 @@ class AIRLTrainer:
             )
 
         self._plot_results()
-        print("AIRL (continuous) training completed.")
+
+        if self.test_set:
+            self._evaluate_test_set(rollout_env, model, n_rollouts=30)
+
+        print("Training completed.")
 
     # -------------------------------------------------------------- #
-    #  Discriminator helpers                                           #
+    #  Policy helpers                                                  #
     # -------------------------------------------------------------- #
-
-    def _compute_f(
-        self,
-        obs: torch.Tensor,       # (B, obs_dim) normalized
-        act_norm: torch.Tensor,  # (B, 1) or (B,) continuous [-1,1]
-        next_obs: torch.Tensor,  # (B, obs_dim) normalized
-        dones: torch.Tensor,     # (B,) float 0/1
-        delta_ts: torch.Tensor,  # (B,) float
-    ) -> torch.Tensor:
-        """
-        Compute the AIRL reward shaping function:
-
-            f(s, a, s', Δt, done)
-                = g_θ(s, a)
-                + γ^Δt · (1 − done) · h_φ(s')
-                − h_φ(s)
-        """
-        if act_norm.dim() == 1:
-            act_norm = act_norm.unsqueeze(-1)
-
-        g    = self.reward_net(obs, act_norm)           # (B,)
-        h_s  = self.shaping_net(obs)                    # (B,)
-        h_sp = self.shaping_net(next_obs)               # (B,)
-        gamma_dt = self.cfg.policy_gamma ** delta_ts    # (B,) element-wise
-
-        return g + gamma_dt * (1.0 - dones) * h_sp - h_s  # (B,)
 
     def _bc_pretrain(self, model: SAC) -> None:
         """
         Behavioural Cloning pre-training for the SBX SAC actor via optax.
 
         Maximises E[log π(a_expert | s_expert)] on the training set, placing the
-        policy near the expert's action distribution before AIRL starts.
+        policy near the expert's action distribution before Adversarial IRL starts.
 
         For continuous actions, a_expert are squashed floats in [-1, 1].  The SAC
         actor returns a distrax distribution (squashed Gaussian) and log_prob
@@ -725,7 +510,7 @@ class AIRLTrainer:
         import optax
 
         cfg = self.cfg
-        obs_scale = np.array(PROFIT_OBS_SCALES, dtype=np.float32)
+        obs_scale = np.array(OBS_SCALES, dtype=np.float32)
 
         all_obs = np.concatenate([
             t.observations / obs_scale for t in self.train_set
@@ -766,7 +551,7 @@ class AIRLTrainer:
             if (step + 1) % 1000 == 0:
                 print(f"  BC step {step+1}/{cfg.bc_pretrain_steps}: loss={float(loss):.4f}")
 
-        # Reset actor optimizer state so BC momentum doesn't bias first AIRL epoch.
+        # Reset actor optimizer state so BC momentum doesn't bias first epoch.
         try:
             fresh_opt_state = model.policy.actor_state.tx.init(
                 model.policy.actor_state.params
@@ -791,13 +576,6 @@ class AIRLTrainer:
         SBX SAC uses JAX/Flax.  actor_state.apply_fn returns a distrax distribution
         (e.g. Transformed(Normal, Tanh)).  log_prob correctly accounts for the tanh
         Jacobian change-of-variables so acts_np should be squashed (in [-1, 1]).
-
-        Args:
-            obs_np:  (B, obs_dim) float32 — normalized by PROFIT_OBS_SCALES
-            acts_np: (B, 1) or (B,)  float32 — squashed actions in [-1, 1]
-
-        Returns:
-            log_probs: (B,) float32 numpy array
         """
         obs_jax = jnp.array(obs_np)
         # TFP distributions require (batch, action_dim) — keep the trailing 1
@@ -816,15 +594,9 @@ class AIRLTrainer:
         """
         Run one episode from the expert's initial state.
 
-        Returns a tuple containing all fields needed for the AIRL discriminator:
-            obs_list       — list of (obs_dim,) float32 normalized  s
-            next_obs_list  — list of (obs_dim,) float32 normalized  s'
-            act_list       — list of [float]  continuous action in [-1, 1]
-            dones_list     — list of float    done flag (1.0 for terminal)
-            dt_list        — list of int      Δt per action
-            traj_reward    — float            cumulative env reward (monitoring)
-            soc_history    — list[float]      SoC at each physical timestep
-            feature_expectation — (n_features,) np.float32
+        Returns:
+            obs_list, next_obs_list, act_list, dones_list,
+            dt_list, traj_reward, soc_history, feature_expectation
         """
         rollout_env.envs[0].unwrapped.set_initial_states(traj.initial_values)
         obs = rollout_env.reset()
@@ -863,67 +635,3 @@ class AIRLTrainer:
             obs_list, next_obs_list, act_list, dones_list,
             dt_list, traj_reward, soc_history, feature_expectation,
         )
-
-    # -------------------------------------------------------------- #
-    #  Plotting                                                        #
-    # -------------------------------------------------------------- #
-
-    @staticmethod
-    def _compute_mae(soc_a: np.ndarray, soc_b: np.ndarray) -> float:
-        """MAE between two SoC trajectories, resampling to the longer length."""
-        n = max(len(soc_a), len(soc_b))
-        if len(soc_a) != n:
-            soc_a = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(soc_a)), soc_a)
-        if len(soc_b) != n:
-            soc_b = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(soc_b)), soc_b)
-        return float(np.mean(np.abs(soc_a - soc_b)))
-
-    def _plot_results(self):
-        cfg = self.cfg
-        epochs = range(1, cfg.n_epochs + 1)
-
-        plt.figure(1)
-        plt.plot(epochs, self.train_dtw_distance, label='Train DTW')
-        if cfg.validation and len(self.val_set) > 0:
-            plt.plot(epochs, self.val_dtw_distance, label='Val DTW')
-            plt.legend()
-        plt.title('AIRL (continuous) — DTW Distance')
-        plt.xlabel('Epoch'); plt.ylabel('Average DTW Distance'); plt.grid()
-        plt.savefig(f'./models/{cfg.folder_name}/dtw_distance.png')
-        plt.close()
-
-        plt.figure(2)
-        plt.plot(epochs, self.train_mae, label='Train MAE')
-        if cfg.validation and len(self.val_set) > 0 and self.val_mae:
-            plt.plot(epochs, self.val_mae, label='Val MAE')
-            plt.legend()
-        plt.title('AIRL (continuous) — SoC MAE')
-        plt.xlabel('Epoch'); plt.ylabel('Average MAE'); plt.grid()
-        plt.savefig(f'./models/{cfg.folder_name}/mae.png')
-        plt.close()
-
-        plt.figure(3)
-        plt.plot(epochs, self.train_feat_l2, label='Train Feature L2')
-        if cfg.validation and len(self.val_set) > 0:
-            plt.plot(epochs, self.val_feat_l2, label='Val Feature L2')
-            plt.legend()
-        plt.title('AIRL (continuous) — Feature L2')
-        plt.xlabel('Epoch'); plt.ylabel('Average Feature L2'); plt.grid()
-        plt.savefig(f'./models/{cfg.folder_name}/feature_l2.png')
-        plt.close()
-
-        plt.figure(4)
-        plt.plot(epochs, self.train_disc_loss)
-        plt.title('AIRL (continuous) — Discriminator BCE Loss')
-        plt.xlabel('Epoch'); plt.ylabel('Disc Loss'); plt.grid()
-        plt.savefig(f'./models/{cfg.folder_name}/disc_loss.png')
-        plt.close()
-
-        plt.figure(5)
-        plt.plot(epochs, self.train_expert_acc, label='Expert Acc (D→1)')
-        plt.plot(epochs, self.train_policy_acc, label='Policy Acc (D→0)')
-        plt.legend()
-        plt.title('AIRL (continuous) — Discriminator Accuracy')
-        plt.xlabel('Epoch'); plt.ylabel('Accuracy'); plt.grid()
-        plt.savefig(f'./models/{cfg.folder_name}/disc_accuracy.png')
-        plt.close()

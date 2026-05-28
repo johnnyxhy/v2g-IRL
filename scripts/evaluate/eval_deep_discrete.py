@@ -9,6 +9,35 @@ from irl.utils.tools import compute_dtw
 import torch
 import json
 
+# ── Plot style ────────────────────────────────────────────────────────────────
+AGENT_COLOR  = "#ff7f0e"
+EXPERT_COLOR = "#000000"
+RANGE_COLOR  = "#ff7f0e"
+PRICE_COLOR  = "#228B22"
+GRID_COLOR   = "#E0E0E0"
+SPINE_COLOR  = "#000000"
+FIG_SIZE     = (6, 4)
+
+plt.rcParams.update({
+    "font.size":          10,
+    "axes.titlesize":     9,
+    "axes.titleweight":   "regular",
+    "axes.labelsize":     9,
+    "axes.spines.top":    True,
+    "axes.spines.right":  True,
+    "axes.edgecolor":     SPINE_COLOR,
+    "axes.linewidth":     0.8,
+    "xtick.labelsize":    9,
+    "ytick.labelsize":    9,
+    "xtick.direction":    "out",
+    "ytick.direction":    "out",
+    "legend.fontsize":    8,
+    "legend.framealpha":  0.9,
+    "legend.edgecolor":   SPINE_COLOR,
+    "figure.dpi":         150,
+})
+# ─────────────────────────────────────────────────────────────────────────────
+
 gym.register(
     id='V2GDeepEnv-discrete',
     entry_point="irl.envs.V2GDeepEnv_discrete:V2GDeepEnv",
@@ -70,26 +99,46 @@ def _price_gap_stats(obs_raw, acts_norm):
 
 def plot_expert_trajectory(soc_history, expert_soc, expert_index,
                            out_start, return_start, out_dur, return_dur,
-                           best_mae_val, mae_std,
-                           min_soc=None, max_soc=None):
-    plt.figure()
-    plt.plot(range(len(soc_history)), soc_history, label=f'Best MAE={best_mae_val:.4f}', color='tab:blue')
-    if min_soc is not None and max_soc is not None:
-        plt.fill_between(range(len(min_soc)), min_soc, max_soc,
-                         color='tab:blue', alpha=0.2, label='Agent SoC Range')
-    plt.plot(range(len(expert_soc)), expert_soc, label='Expert SoC', linestyle='--', color='tab:orange')
-    plt.axvspan(out_start, out_start + out_dur,
-                color='red', alpha=0.3, label='Out Journey')
-    plt.axvspan(return_start, return_start + return_dur,
-                color='blue', alpha=0.3, label='Return Journey')
-    energy_price = energy_price_profile[:len(soc_history)]
-    plt.plot(range(len(energy_price)), energy_price, label='Energy Price', color='green')
-    plt.xlabel('Timestep')
-    plt.ylabel('State of Charge (SoC)')
-    plt.legend()
-    plt.title(
-        f'Deep MaxEnt Discrete IRL \u2014 Best MAE={best_mae_val:.4f} \u00b1 {mae_std:.4f} \u2014 Traj {expert_index}'
+                           best_mae_val, best_mae_dtw,
+                           min_soc=None, max_soc=None, interval_score=None):
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    ax.plot(
+        range(len(soc_history)), soc_history,
+        label=f'Agent (MAE={best_mae_val:.4f})', color=AGENT_COLOR, linewidth=1.8,
     )
+    if min_soc is not None and max_soc is not None:
+        ax.fill_between(
+            range(len(min_soc)), min_soc, max_soc,
+            color=RANGE_COLOR, alpha=0.2, label='Agent SoC Range',
+        )
+    ax.plot(
+        range(len(expert_soc)), expert_soc,
+        label='Expert SoC', linestyle='--', color=EXPERT_COLOR, linewidth=1.8,
+    )
+    ax.axvspan(
+        out_start, out_start + out_dur,
+        color='#FF4444', alpha=0.15, label='Outbound Journey',
+    )
+    ax.axvspan(
+        return_start, return_start + return_dur,
+        color='#4444FF', alpha=0.15, label='Return Journey',
+    )
+    price_len = min(len(soc_history), len(energy_price_profile))
+    ax.plot(
+        range(price_len), energy_price_profile[:price_len],
+        label='Energy Price', color=PRICE_COLOR, linewidth=1.2, linestyle=':',
+    )
+    ax.set_xlabel('Timestep')
+    ax.set_ylabel('State of Charge (SoC)')
+    ax.grid(True, color=GRID_COLOR, linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.legend()
+    title = f'Deep MaxEnt Discrete IRL \u2014 MAE={best_mae_val:.4f} | DTW={best_mae_dtw:.3f}'
+    if interval_score is not None:
+        title += f' | IS={interval_score:.3f}'
+    title += f' \u2014 Trajectory {expert_index}'
+    ax.set_title(title)
+    plt.tight_layout()
     plt.show()
 
 
@@ -206,6 +255,7 @@ def evaluate(vec_env, model, expert_data, expert_index, reward_net=None, n_rollo
 
         if mae_this < best_mae_val:
             best_mae_val = mae_this
+            best_mae_dtw = dtw_distance
             best_mae_soc_history = soc_history
             best_mae_info = info[0]
 
@@ -265,8 +315,9 @@ def evaluate(vec_env, model, expert_data, expert_index, reward_net=None, n_rollo
             best_mae_soc_history, expert_soc, expert_index,
             best_mae_info['out_start_timestep'], best_mae_info['return_start_timestep'],
             best_mae_info['out_duration'], best_mae_info['return_duration'],
-            best_mae_val, mae_std,
+            best_mae_val, best_mae_dtw,
             min_soc=min_soc, max_soc=max_soc,
+            interval_score=interval_score,
         )
 
     return dtw_mean, interval_score, mae_mean, best_dtw, best_mae_val, all_dtw, all_mae, agent_stats, expert_stats
@@ -274,13 +325,14 @@ def evaluate(vec_env, model, expert_data, expert_index, reward_net=None, n_rollo
 
 if __name__ == "__main__":
     # --- Configuration ---
-    experiment_folder = "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_gap_notarget_pricediff_male4049"  # Must match folder_name used during training
+    experiment_folder = "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_male5059"  # Must match folder_name used during training
     epoch_to_load = 20
-    segment = "Male 40-49"
+    segment = "Male 50-59"
     hidden_dim = 32  # Must match reward_hidden_dim used during training
-    n_rollouts = 20
-    n_figures = 10              # number of example figures to display
+    n_rollouts = 30
+    n_figures = 5             # how many test trajectories to plot (last n)
     eval_ratio = 1.0           # fraction of segment trajectories to evaluate (1.0 = all)
+    plot_only = True           # if True, only evaluate the last n_figures trajectories
     deterministic_policy = False
 
     with open("data/processed_trajectories_deep_discrete_gap_pricediff.json", "r") as f:
@@ -301,7 +353,9 @@ if __name__ == "__main__":
     expert_indexes = find_expert_indexes(expert_data, segment)
     n_eval = max(1, int(len(expert_indexes) * eval_ratio))
     expert_indexes = expert_indexes[:n_eval]
-    print(f"Found {len(expert_indexes)} trajectories for segment '{segment}' (evaluating {n_eval})")
+    if plot_only:
+        expert_indexes = expert_indexes[-n_figures:]
+    print(f"Found {len(expert_indexes)} trajectories for segment '{segment}' (evaluating {len(expert_indexes)})")
 
     def _avg_stat(stats_list, key):
         vals = [s[key] for s in stats_list if not np.isnan(s[key])]
@@ -323,7 +377,7 @@ if __name__ == "__main__":
             reward_net=reward_net,
             n_rollouts=n_rollouts,
             deterministic=deterministic_policy,
-            plot=(i < n_figures),
+            plot=(plot_only or i >= len(expert_indexes) - n_figures),
         )
         all_rollout_dtw.extend(traj_dtw)
         all_rollout_mae.extend(traj_mae)

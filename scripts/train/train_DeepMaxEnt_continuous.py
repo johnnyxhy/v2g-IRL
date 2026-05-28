@@ -19,10 +19,11 @@ gym.register(
 
 if __name__ == "__main__":
     # Load expert data (run expert_loader_deep_continuous.py first to generate the JSON)
-    train_set, val_set = load_deep_expert_data(
+    train_set, val_set, test_set = load_deep_expert_data(
         "data/processed_trajectories_deep_profit.json",
         segment="Male 50-59",
         train_ratio=0.8,
+        val_ratio=0.1,
     )
 
     cfg = DeepMaxEntConfig()
@@ -30,10 +31,10 @@ if __name__ == "__main__":
     cfg.reward_lr = 1e-3
     cfg.reward_lr_end = 1e-3
     cfg.rollout_samples = 30
-    cfg.policy_train_steps_per_iter = 100_000
+    cfg.policy_train_steps_per_iter = 1_000
     cfg.reward_hidden_dim = 32
     cfg.segment = "Male 50-59"
-    cfg.folder_name = "DeepMaxEnt/continuous/DeepMaxEntIRL_continuous_male5059"
+    cfg.folder_name = "DeepMaxEnt/continuous/DeepMaxEntIRL_continuous_male5059_new"
     cfg.validation = True
     cfg.action_penalty_coeff = 0.0
 
@@ -43,6 +44,7 @@ if __name__ == "__main__":
     trainer = DeepMaxEntIRLTrainer(
         train_set=train_set,
         val_set=val_set,
+        test_set=test_set,
         env_name='V2GDeepEnv-continuous',
         cfg=cfg,
     )

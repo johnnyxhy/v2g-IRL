@@ -7,6 +7,35 @@ from irl.MaxEnt.MaxEnt_discrete import FlattenNormalizeObsWrapper
 from irl.utils.tools import compute_dtw
 import json
 
+# ── Plot style ────────────────────────────────────────────────────────────────
+AGENT_COLOR  = "#0000FF"
+EXPERT_COLOR = "#000000"
+RANGE_COLOR  = "tab:blue"
+PRICE_COLOR  = "#228B22"
+GRID_COLOR   = "#E0E0E0"
+SPINE_COLOR  = "#000000"
+FIG_SIZE     = (6, 4)
+
+plt.rcParams.update({
+    "font.size":          10,
+    "axes.titlesize":     9,
+    "axes.titleweight":   "regular",
+    "axes.labelsize":     9,
+    "axes.spines.top":    True,
+    "axes.spines.right":  True,
+    "axes.edgecolor":     SPINE_COLOR,
+    "axes.linewidth":     0.8,
+    "xtick.labelsize":    9,
+    "ytick.labelsize":    9,
+    "xtick.direction":    "out",
+    "ytick.direction":    "out",
+    "legend.fontsize":    8,
+    "legend.framealpha":  0.9,
+    "legend.edgecolor":   SPINE_COLOR,
+    "figure.dpi":         150,
+})
+# ─────────────────────────────────────────────────────────────────────────────
+
 gym.register(
     id='V2GEnv-discrete',
     entry_point="irl.envs.V2GEnv_discrete:V2GEnv",
@@ -46,36 +75,69 @@ def _resample_trajectory(values, target_len):
 
 def plot_expert_trajectory(soc_history, expert_soc, expert_index,
                            out_start_timestep, return_start_timestep,
-                           out_duration, return_duration, best_mae_val, mae_std,
+                           out_duration, return_duration, best_mae_val, best_mae_dtw,
                            min_soc=None, max_soc=None, interval_score=None):
-    plt.figure()
-    plt.plot(range(len(soc_history)), soc_history, label=f'Best MAE={best_mae_val:.4f}', color='tab:blue')
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    ax.plot(
+        range(len(soc_history)),
+        soc_history,
+        label=f'Agent (MAE={best_mae_val:.4f})',
+        color=AGENT_COLOR,
+        linewidth=1.8,
+    )
     if min_soc is not None and max_soc is not None:
-        plt.fill_between(
+        ax.fill_between(
             range(len(min_soc)),
             min_soc,
             max_soc,
-            color='tab:blue',
+            color=RANGE_COLOR,
             alpha=0.2,
-            label='Agent SoC Range'
+            label='Agent SoC Range',
         )
-    plt.plot(range(len(expert_soc)), expert_soc, label='Expert SoC', linestyle='--', color='tab:orange')
-    plt.axvspan(out_start_timestep, out_start_timestep + out_duration,
-                color='red', alpha=0.3, label='Out Journey')
-    plt.axvspan(return_start_timestep, return_start_timestep + return_duration,
-                color='blue', alpha=0.3, label='Return Journey')
+    ax.plot(
+        range(len(expert_soc)),
+        expert_soc,
+        label='Expert SoC',
+        linestyle='--',
+        color=EXPERT_COLOR,
+        linewidth=1.8,
+    )
+    ax.axvspan(
+        out_start_timestep,
+        out_start_timestep + out_duration,
+        color='#FF4444',
+        alpha=0.15,
+        label='Outbound Journey',
+    )
+    ax.axvspan(
+        return_start_timestep,
+        return_start_timestep + return_duration,
+        color='#4444FF',
+        alpha=0.15,
+        label='Return Journey',
+    )
 
-    energy_price = energy_price_profile[:len(soc_history)]
-    plt.plot(range(len(energy_price)), energy_price, label='Energy Price', color='green')
+    price_len = min(len(soc_history), len(energy_price_profile))
+    ax.plot(
+        range(price_len),
+        energy_price_profile[:price_len],
+        label='Energy Price',
+        color=PRICE_COLOR,
+        linewidth=1.2,
+        linestyle=':',
+    )
 
-    plt.xlabel('Timestep')
-    plt.ylabel('State of Charge (SoC)')
-    plt.legend()
-    title = f'Linear MaxEnt IRL \u2014 Best MAE={best_mae_val:.4f} \u00b1 {mae_std:.4f}'
+    ax.set_xlabel('Timestep')
+    ax.set_ylabel('State of Charge (SoC)')
+    ax.grid(True, color=GRID_COLOR, linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.legend()
+    title = f'Linear MaxEnt IRL \u2014 MAE={best_mae_val:.4f} | DTW={best_mae_dtw:.3f}'
     if interval_score is not None:
-        title += f' \u2014 IS: {interval_score:.3f}'
+        title += f' | IS={interval_score:.3f}'
     title += f' \u2014 Trajectory {expert_index}'
-    plt.title(title)
+    ax.set_title(title)
+    plt.tight_layout()
     plt.show()
 
 
@@ -94,25 +156,29 @@ def plot_expert_trajectory_rollouts(
 ):
     """Plot expert SoC vs rollout mean SoC with min-max range."""
     timesteps = range(len(mean_soc))
-    plt.figure()
-    plt.plot(timesteps, mean_soc, label='Agent Mean SoC', color='tab:blue')
-    plt.fill_between(timesteps, min_soc, max_soc, color='tab:blue', alpha=0.2, label='Agent SoC Range')
-    plt.plot(range(len(expert_soc)), expert_soc, label='Expert SoC', linestyle='--', color='tab:orange')
+    fig, ax = plt.subplots(figsize=FIG_SIZE)
+    ax.plot(timesteps, mean_soc, label='Agent Mean SoC', color=AGENT_COLOR, linewidth=1.8)
+    ax.fill_between(timesteps, min_soc, max_soc, color=RANGE_COLOR, alpha=0.2, label='Agent SoC Range')
+    ax.plot(range(len(expert_soc)), expert_soc, label='Expert SoC', linestyle='--', color=EXPERT_COLOR, linewidth=1.8)
 
-    plt.axvspan(out_start_timestep, out_start_timestep + out_duration,
-                color='red', alpha=0.2, label='Out Journey')
-    plt.axvspan(return_start_timestep, return_start_timestep + return_duration,
-                color='blue', alpha=0.15, label='Return Journey')
+    ax.axvspan(out_start_timestep, out_start_timestep + out_duration,
+               color='#FF4444', alpha=0.15, label='Outbound Journey')
+    ax.axvspan(return_start_timestep, return_start_timestep + return_duration,
+               color='#4444FF', alpha=0.15, label='Return Journey')
 
-    energy_price = energy_price_profile[:len(mean_soc)]
-    plt.plot(range(len(energy_price)), energy_price, label='Energy Price', color='green')
+    price_len = min(len(mean_soc), len(energy_price_profile))
+    ax.plot(range(price_len), energy_price_profile[:price_len],
+            label='Energy Price', color=PRICE_COLOR, linewidth=1.2, linestyle=':')
 
-    plt.xlabel('Timestep')
-    plt.ylabel('State of Charge (SoC)')
-    plt.legend()
-    plt.title(
+    ax.set_xlabel('Timestep')
+    ax.set_ylabel('State of Charge (SoC)')
+    ax.grid(True, color=GRID_COLOR, linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.legend()
+    ax.set_title(
         f'Linear MaxEnt IRL \u2014 DTW mean\u00b1std: {dtw_mean:.2f}\u00b1{dtw_std:.2f} \u2014 Trajectory {expert_index}'
     )
+    plt.tight_layout()
     plt.show()
 
 
@@ -207,6 +273,7 @@ def evaluate(vec_env, model, expert_data, expert_index, n_rollouts=10, determini
 
         if mae_this < best_mae_val:
             best_mae_val = mae_this
+            best_mae_dtw = dtw_distance
             best_mae_soc_history = soc_history
             best_mae_info = info[0]
 
@@ -262,7 +329,7 @@ def evaluate(vec_env, model, expert_data, expert_index, n_rollouts=10, determini
             best_mae_info["out_duration"],
             best_mae_info["return_duration"],
             best_mae_val,
-            mae_std,
+            best_mae_dtw,
             min_soc=min_soc,
             max_soc=max_soc,
             interval_score=interval_score,
@@ -273,13 +340,14 @@ def evaluate(vec_env, model, expert_data, expert_index, n_rollouts=10, determini
 
 if __name__ == "__main__":
     # --- Configuration ---
-    experiment_folder = "MaxEnt/discrete/MaxEntIRL_discrete_pricediff_male5059_charge"  # Must match the folder_name used during training
+    experiment_folder = "MaxEnt/discrete/MaxEntIRL_discrete_pricediff_female5059"  # Must match the folder_name used during training
     epoch_to_load = 20
     expert_data_path = "data/processed_trajectories_discrete_pricediff.json"
-    segment = "Male 50-59"
-    n_rollouts = 20
-    n_figures = 5              # number of example figures to display
+    segment = "Female 50-59"
+    n_rollouts = 30
+    n_figures = 10             # how many test trajectories to plot (last n)
     eval_ratio = 1.0           # fraction of segment trajectories to evaluate (1.0 = all)
+    plot_only = False           # if True, only evaluate the last n_figures trajectories
     deterministic_policy = False
     noise_scale = 1.0           # 0.0 = deterministic, 1.0 = full stochastic
 
@@ -295,7 +363,9 @@ if __name__ == "__main__":
     expert_indexes = find_expert_indexes(expert_data, segment)
     n_eval = max(1, int(len(expert_indexes) * eval_ratio))
     expert_indexes = expert_indexes[:n_eval]
-    print(f"Found {len(expert_indexes)} trajectories for segment '{segment}' (evaluating {n_eval})")
+    if plot_only:
+        expert_indexes = expert_indexes[-n_figures:]
+    print(f"Found {len(expert_indexes)} trajectories for segment '{segment}' (evaluating {len(expert_indexes)})")
 
     all_rollout_dtw = []
     all_rollout_mae = []
@@ -313,7 +383,7 @@ if __name__ == "__main__":
             n_rollouts=n_rollouts,
             deterministic=deterministic_policy,
             noise_scale=noise_scale,
-            plot=(i < n_figures),
+            plot=(plot_only or i >= len(expert_indexes) - n_figures),
         )
         all_rollout_dtw.extend(traj_dtw)
         all_rollout_mae.extend(traj_mae)

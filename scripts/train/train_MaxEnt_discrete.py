@@ -23,19 +23,19 @@ if __name__ == "__main__":
     cfg.n_epochs = 20
     cfg.rollout_samples = 20
     cfg.grad_clip_norm = 1.0
-    cfg.segment = "Male 50-59"
+    cfg.segment = "Male 40-49"
     cfg.policy_train_steps_per_iter = 1_500_000
     cfg.policy_n_steps = 2048
     cfg.policy_n_epochs = 10
     cfg.policy_ent_coef = 0.01
-    cfg.folder_name = "MaxEnt/discrete/MaxEntIRL_discrete_pricediff_male5059_charge"
+    cfg.folder_name = "MaxEnt/discrete/MaxEntIRL_discrete_pricediff_male4049"
     cfg.validation = True
     cfg.reset_ppo_each_epoch = True
     cfg.reg_lambda = 0.01
     cfg.description = "replace soc_target with soc_gap, new soc_target, 20 epochs, 1,500,000 PPO steps, PPO reset, 0.01 boundary penalty, 0.01 l2 reg, 0.01 lr"
 
     trainer = MaxEntIRLTrainer_Discrete_PPO(
-        initial_reward_weights=np.array([1.0, 0.9, -0.1, -0.1, -1.0, -0.2, -1.0], dtype=np.float32),
+        initial_reward_weights=np.array([0.5, 0.5, 0.5, 0.5, -1.0, -0.2, -1.0], dtype=np.float32),
         expert_trajectories=dataset,
         env_name='V2GEnv-discrete',
         cfg=cfg,

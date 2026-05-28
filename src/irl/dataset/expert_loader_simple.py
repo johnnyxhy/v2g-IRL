@@ -96,16 +96,14 @@ def load_trajectories(input_file, output_file=None):
     charge_action_map = {'charge': 0, 'discharge': 1, 'none': 2}
     df['charge_action_index'] = df['Action'].map(charge_action_map)
     
-    # --- 10. Battery needed and exceeded target ---
-    df['battery_needed_target'] = np.maximum(0.0, df['SoC_target'] - df['SoC_end'])
-    df['battery_exceeded_target'] = np.maximum(0.0, df['SoC_end'] - df['SoC_target'])
+    # --- 10. Amount charged and discharged as SoC fractions ---
+    df['amount_charged'] = np.where(df['Action'] == 'charge', df['Total_Charge_kWh'] / df['Battery_Capacity_kWh'], 0.0)
+    df['amount_discharged'] = np.where(df['Action'] == 'discharge', df['Total_Discharge_kWh'] / df['Battery_Capacity_kWh'], 0.0)
 
-    # --- 11. SoC outside acceptable range, default 0.0 ---
-    df['soc_outside_range'] = np.select(
-        [df['SoC_end'] < 0.2, df['SoC_end'] > 0.8],
-        [0.2 - df['SoC_end'], df['SoC_end'] - 0.8],
-        default=0.0
-    )
+    # --- 11. Battery needed and exceeded target (squared, delta_t=1 per row) ---
+    df['battery_needed_target'] = np.maximum(0.0, df['SoC_target'] - df['SoC_end']) ** 2
+    df['battery_exceeded_target'] = np.maximum(0.0, df['SoC_end'] - df['SoC_target']) ** 2
+
     # --- 12. Journey failure ---
     # Decided if in row above, location is driving_out or driving_return and SoC_end == 0
     df['journey_failure'] = np.where(
@@ -154,8 +152,11 @@ def load_trajectories(input_file, output_file=None):
             'work_charge_power': episode_data['work_charge_index'].iloc[0].item(),
         }
 
-        # --- Extract only when charge action changes or if charge action has same value for more than 5 timesteps ---
-        action_blocks = (episode_data['Charge_Action'] != episode_data['Charge_Action'].shift(1)).cumsum()
+        # --- Extract only when action type changes or if an action block lasts more than 5 timesteps ---
+        # Split every idle timestep into its own block, even for back-to-back idle rows.
+        action_change = episode_data['Action'] != episode_data['Action'].shift(1)
+        is_idle = episode_data['Action'] == 'none'
+        action_blocks = (action_change | is_idle).cumsum()
 
         indices_to_keep = set()
         for _, block in episode_data.groupby(action_blocks):
@@ -165,12 +166,13 @@ def load_trajectories(input_file, output_file=None):
         episode_data = episode_data.loc[sorted(indices_to_keep)].reset_index(drop=True)
 
         # --- EXTRACT FEATURES ---
-        # [battery_needed_target, battery_exceeded_target, soc_outside_range, journey_failure]
+        # [amount_charged, amount_discharged, battery_needed_target, battery_exceeded_target, journey_failure]
 
         features = episode_data[[
+            'amount_charged',
+            'amount_discharged',
             'battery_needed_target',
             'battery_exceeded_target',
-            'soc_outside_range',
             'journey_failure'
         ]].values.astype(np.float64)
 
@@ -225,4 +227,4 @@ def load_trajectories(input_file, output_file=None):
 
 
 # Example usage:
-episodes = load_trajectories("data/EVdataset_simple_probabilistic.csv", output_file="data/processed_trajectories_simple_probabilistic.json")
+episodes = load_trajectories("data/EVdataset_simple.csv", output_file="data/processed_trajectories_simple.json")

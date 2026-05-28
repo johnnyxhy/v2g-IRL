@@ -3,9 +3,10 @@ import torch
 from stable_baselines3.common.buffers import DictReplayBuffer
 from sbx.common.type_aliases import ReplayBufferSamplesNp
 
-
 class VariableDtReplayBuffer(DictReplayBuffer):
     """
+    Based on SBX's DictReplayBuffer, but modified to store per-transition delta_t values
+
     Replay buffer that stores per-transition delta_t values and computes
     gamma^(delta_t) as the per-transition discount, passed directly to
     SBX's Bellman update via the discounts field of ReplayBufferSamplesNp.
