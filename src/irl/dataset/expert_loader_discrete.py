@@ -238,4 +238,5 @@ def load_trajectories(input_file, output_file=None):
 
 
 # Example usage:
-episodes = load_trajectories("data/EVdataset_discrete_pricediff.csv", output_file="data/processed_trajectories_discrete_pricediff.json")
+if __name__ == "__main__":
+    episodes = load_trajectories("data/EVdataset_discrete_pricediff.csv", output_file="data/processed_trajectories_discrete_pricediff.json")

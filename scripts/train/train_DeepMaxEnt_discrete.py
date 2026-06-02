@@ -23,8 +23,8 @@ gym.register(
 
 if __name__ == "__main__":
     train_set, val_set, test_set = load_deep_discrete_expert_data(
-        "data/processed_trajectories_deep_discrete_gap_pricediff.json",
-        segment="Male 40-49",
+        "data/processed_trajectories_deep_discrete_special_lowbat.json",
+        segment="Male 50-59",
         train_ratio=0.8,
         val_ratio=0.1,
     )
@@ -42,12 +42,12 @@ if __name__ == "__main__":
     cfg.reward_hidden_dim = 32
     cfg.reward_grad_clip = 5.0
     cfg.reward_l2_reg = 0.01
-    cfg.folder_name = "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_male4049"
+    cfg.folder_name = "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_special_lowbat_male5059"
     cfg.validation = True
     cfg.action_penalty_coeff = 0.0
     cfg.reward_scale = 10.0
 
-    cfg.description = "Added 0.2 buffer, using soc_gap. Running with new dataset, 20 epochs, 1.5M policy steps per epoch, 0.01 entropy coeff, 0.01 reward L2 reg, 5.0 grad clip, reward scale 10.0, no action penalty."
+    cfg.description = "Latest version on special dataset"
 
     # Warm-start reward network (set to None to train from scratch)
     #cfg.pretrained_reward_net_path = "./models/DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_female5059/reward_net_epoch12.pt"

@@ -227,4 +227,5 @@ def load_trajectories(input_file, output_file=None):
 
 
 # Example usage:
-episodes = load_trajectories("data/EVdataset_simple.csv", output_file="data/processed_trajectories_simple.json")
+if __name__ == "__main__":
+    episodes = load_trajectories("data/EVdataset_simple.csv", output_file="data/processed_trajectories_simple.json")

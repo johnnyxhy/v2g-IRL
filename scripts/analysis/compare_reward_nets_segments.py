@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from irl.DeepMaxEnt.DeepMaxEnt import RewardNet, PROFIT_OBS_SCALES
+from irl.DeepMaxEnt.DeepMaxEnt import RewardNet, OBS_SCALES
 
 # ---------------------------------------------------------------------------
 # Configuration – edit these
@@ -25,18 +25,18 @@ from irl.DeepMaxEnt.DeepMaxEnt import RewardNet, PROFIT_OBS_SCALES
 MODELS_ROOT = Path(__file__).resolve().parent.parent.parent / "models"
 
 SEGMENTS: dict[str, str] = {
-    "Male 50-59":   "Adversarial/discrete/Adversarial_discrete_male5059_new",
-    "Male 40-49":   "Adversarial/discrete/Adversarial_discrete_male4049_new",
-    "Female 50-59": "Adversarial/discrete/Adversarial_discrete_female5059_new",
+    "Male 50-59":   "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_male5059",
+    "Male 40-49":   "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_male4049",
+    "Female 50-59": "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_female5059",
 }
 
 EPOCH: int = 20
 HIDDEN_DIM: int = 32
 
-OUTDIR = Path(__file__).resolve().parent.parent.parent / "models" / "AdvCompare_pdp"
+OUTDIR = Path(__file__).resolve().parent.parent.parent / "models" / "Deep_pdp"
 # ---------------------------------------------------------------------------
 
-SCALES = PROFIT_OBS_SCALES  # [96, 1, 1, 0.47, 2, 96, 22]
+SCALES = OBS_SCALES  # [96, 1, 1, 0.47, 2, 96, 22]
 
 energy_price_profile = np.array([
     0.07, 0.07, 0.07, 0.07, 0.08, 0.08, 0.09, 0.09, 0.10, 0.10, 0.11, 0.12,
@@ -200,8 +200,10 @@ def compute_shap_per_decision(
     n = n_background
     _soc   = rng.uniform(0.2, 0.8, n)
     _soc_t = rng.uniform(0.2, 0.5, n)
-    timestep = rng.integers(0, 96, n)
-    price = energy_price_profile[timestep]
+    #timestep = rng.integers(0, 96, n)
+    timestep = np.full(n, 48)
+    #price = energy_price_profile[timestep]
+    price = rng.uniform(0.07, 0.47, n)
 
     bg = np.stack([
         timestep / 96.0,
