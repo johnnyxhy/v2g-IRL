@@ -20,9 +20,9 @@ from tensorboard.backend.event_processing.event_accumulator import EventAccumula
 
 
 RUN_CONFIG = {
-    "run_root": Path("old_models/MaxEntIRL_discrete_pricediff_male5059"),
+    "run_root": Path("models/MaxEnt/simple/MaxEntIRL_simple_male5059"),
     "tensorboard_subdir": Path("tensorboard"),
-    "output_name": "ep_rew_mean_ppo_overlay.png",
+    "output_name": "ep_rew_mean_simple.png",
     "tag": "ep_rew_mean",
     "title": "PPO Episode Reward Mean (IRL Epoch Overlay)",
     "smooth_window": 1,

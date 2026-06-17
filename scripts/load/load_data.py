@@ -33,7 +33,7 @@ def load_expert_data(args):
 args = {
     'expert_loader': 'deep_discrete',
     'input_file': 'data/EVDataset_discrete_special_highbat.csv',
-    'output_file': 'data/processed_trajectories_deep_discrete_special_lowbat.json',
+    'output_file': 'data/processed_trajectories_deep_discrete_special_highbat.json',
 }
 
 if __name__ == "__main__":

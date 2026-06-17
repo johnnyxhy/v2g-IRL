@@ -23,7 +23,7 @@ gym.register(
 
 if __name__ == "__main__":
     train_set, val_set, test_set = load_deep_discrete_expert_data(
-        "data/processed_trajectories_deep_discrete_special_lowbat.json",
+        "data/processed_trajectories_deep_discrete_special_highbat.json",
         segment="Male 50-59",
         train_ratio=0.8,
         val_ratio=0.1,
@@ -42,7 +42,7 @@ if __name__ == "__main__":
     cfg.reward_hidden_dim = 32
     cfg.reward_grad_clip = 5.0
     cfg.reward_l2_reg = 0.01
-    cfg.folder_name = "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_special_lowbat_male5059"
+    cfg.folder_name = "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_special_highbat_male5059"
     cfg.validation = True
     cfg.action_penalty_coeff = 0.0
     cfg.reward_scale = 10.0

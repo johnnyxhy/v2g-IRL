@@ -1,0 +1,212 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   V2G-IRL Demo — Custom Streamlit Stylesheet
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Google Font import ───────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* ── Global ───────────────────────────────────────────────────────────── */
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+}
+
+/* ── Remove default Streamlit top padding ─────────────────────────────── */
+.block-container {
+    padding-top: 1.5rem !important;
+    padding-bottom: 2rem !important;
+    max-width: 1400px !important;
+}
+
+/* ── Sidebar ──────────────────────────────────────────────────────────── */
+[data-testid="stSidebar"] {
+    background: #0F172A !important;
+    border-right: 1px solid #1E293B !important;
+}
+[data-testid="stSidebar"] * {
+    color: #E2E8F0 !important;
+}
+[data-testid="stSidebar"] .stRadio label,
+[data-testid="stSidebar"] .stCheckbox label {
+    font-size: 0.875rem !important;
+    font-weight: 500 !important;
+}
+[data-testid="stSidebar"] hr {
+    border-color: #334155 !important;
+}
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 {
+    color: #F1F5F9 !important;
+    letter-spacing: -0.01em;
+}
+/* Logo / brand area */
+.sidebar-brand {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #60A5FA !important;
+    letter-spacing: -0.02em;
+    padding-bottom: 0.25rem;
+}
+.sidebar-subtitle {
+    font-size: 0.72rem;
+    color: #94A3B8 !important;
+    margin-bottom: 1rem;
+}
+
+/* ── Section divider labels ───────────────────────────────────────────── */
+.section-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #64748B;
+    margin-bottom: 0.3rem;
+    margin-top: 1rem;
+}
+
+/* ── Info / initial-condition cards ──────────────────────────────────── */
+.ic-card {
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 0.75rem;
+}
+.ic-card-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem 1.5rem;
+}
+.ic-item-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #64748B;
+    margin-bottom: 0.15rem;
+}
+.ic-item-value {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #0F172A;
+}
+
+/* ── Metric cards ─────────────────────────────────────────────────────── */
+.metric-card {
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 10px;
+    padding: 0.85rem 1.1rem;
+    text-align: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.metric-card-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #64748B;
+    margin-bottom: 0.3rem;
+}
+.metric-card-value {
+    font-size: 1.45rem;
+    font-weight: 700;
+    color: #0F172A;
+    font-variant-numeric: tabular-nums;
+}
+.metric-card-sub {
+    font-size: 0.72rem;
+    color: #94A3B8;
+    margin-top: 0.1rem;
+}
+
+/* ── Method pill badges ───────────────────────────────────────────────── */
+.badge-maxent     { background:#DBEAFE; color:#1D4ED8; border:1px solid #BFDBFE; }
+.badge-deepmaxent { background:#FEF3C7; color:#92400E; border:1px solid #FDE68A; }
+.badge-airl       { background:#FEE2E2; color:#991B1B; border:1px solid #FECACA; }
+.badge-expert     { background:#F1F5F9; color:#334155; border:1px solid #CBD5E1; }
+.method-badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    margin-right: 0.4rem;
+}
+
+/* ── Page title area ──────────────────────────────────────────────────── */
+.page-title {
+    font-size: 1.55rem;
+    font-weight: 700;
+    color: #0F172A;
+    letter-spacing: -0.03em;
+    margin-bottom: 0.15rem;
+}
+.page-subtitle {
+    font-size: 0.88rem;
+    color: #64748B;
+    margin-bottom: 1.25rem;
+}
+
+/* ── Mode toggle pill ─────────────────────────────────────────────────── */
+.mode-active {
+    background: #1E3A8A;
+    color: #FFFFFF;
+    border-radius: 6px;
+    padding: 0.35rem 0.9rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+.mode-inactive {
+    color: #64748B;
+    padding: 0.35rem 0.9rem;
+    font-size: 0.82rem;
+}
+
+/* ── Run button ───────────────────────────────────────────────────────── */
+div[data-testid="stButton"] > button[kind="primary"] {
+    background: linear-gradient(135deg, #1D4ED8 0%, #2563EB 100%) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.9rem !important;
+    padding: 0.6rem 1.8rem !important;
+    box-shadow: 0 2px 8px rgba(37,99,235,0.35) !important;
+    transition: all 0.15s ease !important;
+}
+div[data-testid="stButton"] > button[kind="primary"]:hover {
+    box-shadow: 0 4px 16px rgba(37,99,235,0.45) !important;
+    transform: translateY(-1px) !important;
+}
+
+/* ── Disabled checkbox dimming ────────────────────────────────────────── */
+.method-disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+/* ── Scenario description pill ────────────────────────────────────────── */
+.scenario-desc {
+    background: #EFF6FF;
+    border-left: 3px solid #2563EB;
+    border-radius: 0 6px 6px 0;
+    padding: 0.5rem 0.85rem;
+    font-size: 0.82rem;
+    color: #1E3A8A;
+    margin-bottom: 1rem;
+}
+
+/* ── Chart container ──────────────────────────────────────────────────── */
+.chart-container {
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
+    padding: 0.5rem;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+
+/* ── Streamlit radio row ──────────────────────────────────────────────── */
+div[data-testid="stRadio"] > div {
+    gap: 0.5rem;
+}

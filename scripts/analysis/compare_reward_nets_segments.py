@@ -25,9 +25,9 @@ from irl.DeepMaxEnt.DeepMaxEnt import RewardNet, OBS_SCALES
 MODELS_ROOT = Path(__file__).resolve().parent.parent.parent / "models"
 
 SEGMENTS: dict[str, str] = {
-    "Male 50-59":   "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_male5059",
-    "Male 40-49":   "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_male4049",
-    "Female 50-59": "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_female5059",
+    "Normal":   "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_special_male5059",
+    "High Bat":   "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_special_highbat_male5059",
+    "Low Bat": "DeepMaxEnt/discrete/DeepMaxEntIRL_discrete_special_lowbat_male5059",
 }
 
 EPOCH: int = 20
@@ -200,10 +200,10 @@ def compute_shap_per_decision(
     n = n_background
     _soc   = rng.uniform(0.2, 0.8, n)
     _soc_t = rng.uniform(0.2, 0.5, n)
-    #timestep = rng.integers(0, 96, n)
-    timestep = np.full(n, 48)
-    #price = energy_price_profile[timestep]
-    price = rng.uniform(0.07, 0.47, n)
+    timestep = rng.integers(0, 96, n)
+    # timestep = np.full(n, 48)
+    price = energy_price_profile[timestep]
+    # price = rng.uniform(0.07, 0.47, n)
 
     bg = np.stack([
         timestep / 96.0,
