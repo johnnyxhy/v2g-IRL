@@ -18,7 +18,9 @@ tensorboard/
 # Do not ignore .zip files that contain "epoch_20" in the filename
 !*epoch20*.zip
 !*epoch50*.zip
+!*epoch30*.zip
 !*epoch20*.pt
+!*epoch30*.pt
 
 # C extensions
 *.so
