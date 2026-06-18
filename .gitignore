@@ -21,6 +21,7 @@ tensorboard/
 !*epoch30*.zip
 !*epoch20*.pt
 !*epoch30*.pt
+!*epoch50*.pt
 
 # C extensions
 *.so
