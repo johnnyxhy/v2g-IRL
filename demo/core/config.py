@@ -116,7 +116,7 @@ SCENARIOS = {
                 "model_folder": os.path.join(ROOT, "models", "Adversarial", "continuous", "AIRL_continuous_male5059"),
                 "algo": "SAC",
                 "model_prefix": "sac_epoch",
-                "last_epoch": 30,
+                "last_epoch": 50,
                 "json_path": os.path.join(ROOT, "data", "processed_trajectories_airl_continuous.json"),
                 "env_id": "V2GDeepEnv-continuous",
                 "entry_point": "irl.envs.V2GDeepEnv_continuous:V2GDeepEnv",
